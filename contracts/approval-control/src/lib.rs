@@ -1,0 +1,136 @@
+#![no_std]
+
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Map, String, Symbol};
+
+const TTL_THRESHOLD: u32 = 100;
+const TTL_EXTEND_TO: u32 = 3_110_400; // ~6 months at 5s/ledger
+
+#[contract]
+pub struct ApprovalControlContract;
+
+#[contracttype]
+enum DataKey {
+    Admin,
+    ApprovedUsers,
+}
+
+#[contractimpl]
+impl ApprovalControlContract {
+    pub fn initialize(env: Env, admin: Address, asset_name: String) {
+        let admin_already_set: bool = env.storage().persistent().has(&DataKey::Admin);
+        if admin_already_set {
+            panic!("contract already initialized");
+        }
+        env.storage().persistent().set(&DataKey::Admin, &admin.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::ApprovedUsers, &Map::<Address, bool>::new(&env));
+        Self::extend_ttl(&env);
+        // emits: Address (admin), String (asset name), u32 (deploy ledger)
+        env.events().publish((symbol_short!("init"),), (admin, asset_name, env.ledger().sequence()));
+    }
+
+    pub fn approve_user(env: Env, admin: Address, user: Address) {
+        Self::require_admin(&env, &admin);
+        let mut approved: Map<Address, bool> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ApprovedUsers)
+            .unwrap_or_else(|| Map::new(&env));
+        approved.set(user.clone(), true);
+        env.storage().persistent().set(&DataKey::ApprovedUsers, &approved);
+        Self::extend_ttl(&env);
+        // emits: Address (admin), Address (user), bool (approved), u32 (ledger), u64 (unix timestamp)
+        env.events().publish((symbol_short!("apprv"),), (admin, user, true, env.ledger().sequence(), env.ledger().timestamp()));
+    }
+
+    pub fn is_approved(env: Env, user: Address) -> bool {
+        Self::extend_ttl(&env);
+        let approved: Option<Map<Address, bool>> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ApprovedUsers);
+        approved
+            .and_then(|map| map.get(user))
+            .unwrap_or(false)
+    }
+
+    pub fn execute_action(env: Env, user: Address) -> Symbol {
+        let approved = Self::is_approved(env.clone(), user.clone());
+        if !approved {
+            panic!("user is not approved to execute this action");
+        }
+        // emits: Address (user), i128 (NAV price in cents, $100.00 = 10000), u64 (unix timestamp)
+        env.events().publish((symbol_short!("prot_exec"),), (user, 10000i128, env.ledger().timestamp()));
+        symbol_short!("exec")
+    }
+}
+
+impl ApprovalControlContract {
+    fn require_admin(env: &Env, admin: &Address) {
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        if &stored_admin != admin {
+            panic!("only admin can call this function");
+        }
+    }
+
+    fn extend_ttl(env: &Env) {
+        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        if env.storage().persistent().has(&DataKey::Admin) {
+            env.storage().persistent().extend_ttl(&DataKey::Admin, TTL_THRESHOLD, TTL_EXTEND_TO);
+        }
+        if env.storage().persistent().has(&DataKey::ApprovedUsers) {
+            env.storage().persistent().extend_ttl(&DataKey::ApprovedUsers, TTL_THRESHOLD, TTL_EXTEND_TO);
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::{Env, Address, String};
+    use soroban_sdk::testutils::Address as _;
+
+    #[test]
+    fn test_initialize_works() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
+        client.initialize(&admin, &asset_name);
+        assert!(!client.is_approved(&admin));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_unapproved_user_cannot_execute() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
+        client.initialize(&admin, &asset_name);
+        client.execute_action(&user);
+    }
+
+    #[test]
+    fn test_admin_can_approve_user_and_user_can_execute() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
+        client.initialize(&admin, &asset_name);
+        client.approve_user(&admin, &user);
+        assert!(client.is_approved(&user));
+        let result = client.execute_action(&user);
+        assert_eq!(result, symbol_short!("exec"));
+    }
+}
