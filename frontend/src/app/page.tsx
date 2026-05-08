@@ -71,6 +71,7 @@ export default function Home() {
   const [whitelistTarget, setWhitelistTarget] = useState('');
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [contractEvents, setContractEvents] = useState<ContractEvent[]>([]);
+  const [adminAddress, setAdminAddress] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [hasFreighter, setHasFreighter] = useState(false);
 
@@ -200,6 +201,8 @@ export default function Home() {
       pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'pending', message: 'Fetching on-chain events...' });
       const events = await fetchContractEvents(20);
       setContractEvents(events);
+      const initEvent = events.find((e) => e.topic[0] === 'init');
+      if (initEvent) setAdminAddress(initEvent.value);
       pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'success', message: `Loaded ${events.length} contract events` });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fetch events';
@@ -259,11 +262,47 @@ export default function Home() {
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
               <p className="text-xs text-slate-400 uppercase tracking-widest">Connected Wallet</p>
-              <p className="mt-1 text-sm font-semibold text-white truncate">{walletAddress || 'Not connected'}</p>
+              <div className="mt-1 flex items-center gap-2">
+                <p className="text-sm font-semibold text-white truncate flex-1">{walletAddress || 'Not connected'}</p>
+                {walletAddress && (
+                  <button
+                    onClick={() => navigator.clipboard.writeText(walletAddress)}
+                    title="Copy address"
+                    className="shrink-0 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-700 hover:text-white"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                    </svg>
+                  </button>
+                )}
+              </div>
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
               <p className="text-xs text-slate-400 uppercase tracking-widest">Contract ID</p>
-              <p className="mt-1 text-xs font-semibold text-white break-all">{CONTRACT_ID}</p>
+              <div className="mt-1 flex items-start gap-2">
+                <p className="text-xs font-semibold text-white break-all flex-1">{CONTRACT_ID}</p>
+                {CONTRACT_ID && CONTRACT_ID !== 'Not set' && (
+                  <button
+                    onClick={() => navigator.clipboard.writeText(CONTRACT_ID)}
+                    title="Copy contract ID"
+                    className="shrink-0 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-700 hover:text-white"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                    </svg>
+                  </button>
+                )}
+              </div>
+              {CONTRACT_ID && CONTRACT_ID !== 'Not set' && (
+                <a
+                  href={`https://stellar.expert/explorer/testnet/contract/${CONTRACT_ID}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 transition"
+                >
+                  View on Stellar Expert ↗
+                </a>
+              )}
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
               <p className="text-xs text-slate-400 uppercase tracking-widest">Network</p>
@@ -486,6 +525,17 @@ export default function Home() {
                   Fetch
                 </button>
               </div>
+              {adminAddress && (
+                <div className="mt-5 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-amber-400">Admin Wallet</p>
+                  <p className="mt-1 text-sm font-mono text-slate-300 truncate">{adminAddress}</p>
+                  {walletAddress && (
+                    <p className="mt-1 text-xs text-slate-500">
+                      {walletAddress === adminAddress ? '✓ Your connected wallet is the admin' : 'Your connected wallet is not the admin'}
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="mt-5 space-y-3">
                 {contractEvents.length === 0 ? (
                   <div className="rounded-2xl bg-slate-950/80 p-4 text-sm text-slate-500">
