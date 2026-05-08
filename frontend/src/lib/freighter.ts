@@ -16,13 +16,23 @@ declare global {
 export const isFreighterInstalled = (): boolean => {
   if (typeof window === 'undefined') return false;
 
-  // Check if we're in an environment that supports browser extensions
-  const hasExtensionSupport = typeof (window as any).chrome !== 'undefined' || typeof (window as any).browser !== 'undefined';
-  if (!hasExtensionSupport) {
-    return false; // Not a browser that supports extensions
+  // First check if Freighter API is available
+  if (Boolean(window.freighterApi)) {
+    return true;
   }
 
-  return Boolean(window.freighterApi);
+  // If not available, check if we're in a browser that should support extensions
+  // This helps provide better error messages
+  const isLikelyExtensionBrowser = typeof (window as any).chrome !== 'undefined' ||
+                                   typeof (window as any).browser !== 'undefined' ||
+                                   typeof (window as any).safari !== 'undefined' ||
+                                   navigator.userAgent.includes('Chrome') ||
+                                   navigator.userAgent.includes('Firefox') ||
+                                   navigator.userAgent.includes('Safari');
+
+  // If we're in a browser that supports extensions but Freighter isn't found,
+  // it might just not be installed yet
+  return false;
 };
 
 const getFreighter = (): FreighterApi => {
@@ -30,13 +40,21 @@ const getFreighter = (): FreighterApi => {
     throw new Error('Freighter wallet requires a browser environment.');
   }
 
-  const hasExtensionSupport = typeof (window as any).chrome !== 'undefined' || typeof (window as any).browser !== 'undefined';
-  if (!hasExtensionSupport) {
-    throw new Error('Freighter wallet requires a browser that supports extensions (Chrome, Firefox, Edge, etc.). Please open this app in a compatible browser.');
-  }
-
   if (!window.freighterApi) {
-    throw new Error('Freighter wallet not found. Please install the Freighter extension from https://www.freighter.app/ and refresh the page.');
+    // Check if we're in a browser that typically supports extensions
+    const isExtensionBrowser = typeof (window as any).chrome !== 'undefined' ||
+                               typeof (window as any).browser !== 'undefined' ||
+                               typeof (window as any).safari !== 'undefined' ||
+                               navigator.userAgent.includes('Chrome') ||
+                               navigator.userAgent.includes('Firefox') ||
+                               navigator.userAgent.includes('Safari') ||
+                               navigator.userAgent.includes('Edge');
+
+    if (!isExtensionBrowser) {
+      throw new Error('Freighter wallet requires a browser that supports extensions (Chrome, Firefox, Safari, Edge, etc.). Please open this app in a compatible browser.');
+    }
+
+    throw new Error('Freighter wallet not found. Please ensure the Freighter extension is installed and enabled, then refresh the page.');
   }
 
   return window.freighterApi;

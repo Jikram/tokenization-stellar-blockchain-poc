@@ -181,18 +181,56 @@ export default function Home() {
               {connected ? 'Reconnect Wallet' : 'Connect Freighter'}
             </button>
             {!hasFreighter && (
-              <p className="mt-3 text-sm text-amber-400">
-                Freighter wallet extension required.{' '}
-                <a
-                  href="https://www.freighter.app/"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline hover:text-amber-300"
+              <div className="mt-3 space-y-2">
+                <p className="text-sm text-amber-400">
+                  Freighter wallet extension required.{' '}
+                  <a
+                    href="https://www.freighter.app/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline hover:text-amber-300"
+                  >
+                    Install Freighter
+                  </a>{' '}
+                  and refresh the page.
+                </p>
+                <button
+                  onClick={() => {
+                    const freighterFound = isFreighterInstalled();
+                    setHasFreighter(freighterFound);
+                    if (!freighterFound) {
+                      const debugInfo = {
+                        hasWindow: typeof window !== 'undefined',
+                        hasFreighterApi: Boolean((window as any).freighterApi),
+                        userAgent: navigator.userAgent.substring(0, 50) + '...',
+                        isExtensionBrowser: typeof (window as any).chrome !== 'undefined' ||
+                                           typeof (window as any).browser !== 'undefined' ||
+                                           typeof (window as any).safari !== 'undefined' ||
+                                           navigator.userAgent.includes('Chrome') ||
+                                           navigator.userAgent.includes('Firefox') ||
+                                           navigator.userAgent.includes('Safari') ||
+                                           navigator.userAgent.includes('Edge')
+                      };
+                      pushActivity({
+                        timestamp: new Date().toISOString(),
+                        type: 'freighter_check',
+                        status: 'error',
+                        message: `Freighter not detected. Debug: ${JSON.stringify(debugInfo)}`
+                      });
+                    } else {
+                      pushActivity({
+                        timestamp: new Date().toISOString(),
+                        type: 'freighter_check',
+                        status: 'success',
+                        message: 'Freighter detected successfully!'
+                      });
+                    }
+                  }}
+                  className="text-sm px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition"
                 >
-                  Install Freighter
-                </a>{' '}
-                and refresh the page.
-              </p>
+                  Check Again
+                </button>
+              </div>
             )}
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
