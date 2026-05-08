@@ -72,6 +72,7 @@ export default function Home() {
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [contractEvents, setContractEvents] = useState<ContractEvent[]>([]);
   const [adminAddress, setAdminAddress] = useState<string>('');
+  const [fetchRange, setFetchRange] = useState<{ start: number; end: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [hasFreighter, setHasFreighter] = useState(false);
 
@@ -199,8 +200,9 @@ export default function Home() {
     setLoading(true);
     try {
       pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'pending', message: 'Fetching on-chain events...' });
-      const events = await fetchContractEvents(20);
+      const { events, startLedger, endLedger } = await fetchContractEvents(20);
       setContractEvents(events);
+      setFetchRange({ start: startLedger, end: endLedger });
       const initEvent = events.find((e) => e.topic[0] === 'init');
       if (initEvent) setAdminAddress(initEvent.value);
       pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'success', message: `Loaded ${events.length} contract events` });
@@ -516,6 +518,11 @@ export default function Home() {
                 <div>
                   <p className="text-xs uppercase tracking-widest text-cyan-400">On-Chain</p>
                   <h3 className="mt-2 text-xl font-semibold text-white">Contract Events</h3>
+                  {fetchRange && (
+                    <p className="mt-1 text-xs text-slate-500">
+                      Ledgers {fetchRange.start.toLocaleString()} → {fetchRange.end.toLocaleString()} · ~{Math.round((fetchRange.end - fetchRange.start) * 5 / 3600)}h lookback
+                    </p>
+                  )}
                 </div>
                 <button
                   onClick={handleFetchEvents}

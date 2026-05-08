@@ -2,6 +2,9 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Map, Symbol};
 
+const TTL_THRESHOLD: u32 = 100;
+const TTL_EXTEND_TO: u32 = 3_110_400; // ~6 months at 5s/ledger
+
 #[contract]
 pub struct ApprovalControlContract;
 
@@ -22,6 +25,7 @@ impl ApprovalControlContract {
         env.storage()
             .persistent()
             .set(&DataKey::ApprovedUsers, &Map::<Address, bool>::new(&env));
+        Self::extend_ttl(&env);
         env.events().publish((symbol_short!("init"),), admin);
     }
 
@@ -34,10 +38,12 @@ impl ApprovalControlContract {
             .unwrap_or_else(|| Map::new(&env));
         approved.set(user.clone(), true);
         env.storage().persistent().set(&DataKey::ApprovedUsers, &approved);
+        Self::extend_ttl(&env);
         env.events().publish((symbol_short!("apprv"),), (admin, user));
     }
 
     pub fn is_approved(env: Env, user: Address) -> bool {
+        Self::extend_ttl(&env);
         let approved: Option<Map<Address, bool>> = env
             .storage()
             .persistent()
@@ -66,6 +72,16 @@ impl ApprovalControlContract {
             .unwrap_or_else(|| panic!("contract not initialized"));
         if &stored_admin != admin {
             panic!("only admin can call this function");
+        }
+    }
+
+    fn extend_ttl(env: &Env) {
+        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        if env.storage().persistent().has(&DataKey::Admin) {
+            env.storage().persistent().extend_ttl(&DataKey::Admin, TTL_THRESHOLD, TTL_EXTEND_TO);
+        }
+        if env.storage().persistent().has(&DataKey::ApprovedUsers) {
+            env.storage().persistent().extend_ttl(&DataKey::ApprovedUsers, TTL_THRESHOLD, TTL_EXTEND_TO);
         }
     }
 }
@@ -106,6 +122,6 @@ mod test {
         ApprovalControlContract::approve_user(env.clone(), admin.clone(), user.clone());
         assert!(ApprovalControlContract::is_approved(env.clone(), user.clone()));
         let result = ApprovalControlContract::execute_action(env.clone(), user.clone());
-        assert_eq!(result, Symbol::short("action_executed"));
+        assert_eq!(result, Symbol::short("exec"));
     }
 }

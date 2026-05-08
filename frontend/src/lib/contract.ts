@@ -55,17 +55,17 @@ export async function executeProtectedAction(userAddress: string) {
   return await assembled.signAndSend({ signTransaction: freighterSigner, force: true });
 }
 
-export async function fetchContractEvents(limit: number = 20): Promise<any[]> {
+export async function fetchContractEvents(limit: number = 20): Promise<{ events: any[]; startLedger: number; endLedger: number }> {
   if (!CONTRACT_ID) throw new Error('NEXT_PUBLIC_CONTRACT_ID is not configured.');
   const server = new rpc.Server(RPC_URL);
   const latest = await server.getLatestLedger();
-  const startLedger = Math.max(1, latest.sequence - 2000);
-  const events = await server.getEvents({
+  const startLedger = Math.max(1, latest.sequence - 10000);
+  const result = await server.getEvents({
     startLedger,
     filters: [{ type: 'contract', contractIds: [CONTRACT_ID] }],
     limit,
   });
-  return events.events.map((event) => {
+  const events = result.events.map((event) => {
     const toReadable = (val: any): string => {
       try {
         const native = scValToNative(val);
@@ -90,4 +90,5 @@ export async function fetchContractEvents(limit: number = 20): Promise<any[]> {
       inSuccessfulContractCall: event.inSuccessfulContractCall,
     };
   });
+  return { events, startLedger, endLedger: latest.sequence };
 }
