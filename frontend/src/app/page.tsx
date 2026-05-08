@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { checkApprovalStatus, approveUser, executeProtectedAction, fetchContractEvents } from '../lib/contract';
 import { connectFreighter, getFreighterPublicKey, checkFreighterInstalled } from '../lib/freighter';
+import { StrKey } from '@stellar/stellar-sdk';
 
 const NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'testnet';
 const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || 'Not set';
@@ -114,8 +115,12 @@ export default function Home() {
   };
 
   const handleKycCheck = async () => {
-    const target = kycCheckTarget.trim() || walletAddress;
+    const target = kycCheckTarget.trim();
     if (!target) return;
+    if (!StrKey.isValidEd25519PublicKey(target)) {
+      setKycStatus('invalid');
+      return;
+    }
     setLoading(true);
     setKycStatus(null);
     try {
@@ -333,33 +338,50 @@ export default function Home() {
                 <input
                   value={kycCheckTarget}
                   onChange={(e) => setKycCheckTarget(e.target.value)}
-                  placeholder={walletAddress || 'Paste any Stellar wallet address…'}
+                  placeholder="Paste any Stellar wallet address…"
                   className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-blue-400 placeholder:text-slate-600"
                 />
                 <button
                   onClick={handleKycCheck}
-                  disabled={loading || (!kycCheckTarget.trim() && !walletAddress)}
+                  disabled={loading || !kycCheckTarget.trim()}
                   className="rounded-2xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Read Chain
                 </button>
               </div>
-              <p className="mt-2 text-xs text-slate-500">Leave blank to check your connected wallet.</p>
+              <p className="mt-2 text-xs text-slate-500">
+                {walletAddress
+                  ? 'No wallet signature needed — this is a free read from the blockchain.'
+                  : 'Paste any Stellar wallet address above — no wallet connection needed to check.'}
+              </p>
 
               {kycStatus && (
                 <div className={`mt-4 rounded-2xl p-4 flex items-center gap-3 ${
                   kycStatus === 'approved' ? 'bg-emerald-500/10 border border-emerald-500/30' :
                   kycStatus === 'not_approved' ? 'bg-red-500/10 border border-red-500/30' :
+                  kycStatus === 'invalid' ? 'bg-amber-500/10 border border-amber-500/30' :
                   'bg-slate-800 border border-slate-700'
                 }`}>
-                  <span className="text-2xl">{kycStatus === 'approved' ? '✓' : kycStatus === 'not_approved' ? '✗' : '!'}</span>
+                  <span className="text-2xl">
+                    {kycStatus === 'approved' ? '✓' : kycStatus === 'not_approved' ? '✗' : '!'}
+                  </span>
                   <div>
-                    <p className={`text-sm font-semibold ${kycStatus === 'approved' ? 'text-emerald-300' : kycStatus === 'not_approved' ? 'text-red-300' : 'text-slate-300'}`}>
+                    <p className={`text-sm font-semibold ${
+                      kycStatus === 'approved' ? 'text-emerald-300' :
+                      kycStatus === 'not_approved' ? 'text-red-300' :
+                      kycStatus === 'invalid' ? 'text-amber-300' :
+                      'text-slate-300'
+                    }`}>
                       {kycStatus === 'approved' ? 'KYC Approved — wallet is whitelisted on-chain' :
                        kycStatus === 'not_approved' ? 'Not Approved — wallet has not been KYC cleared' :
+                       kycStatus === 'invalid' ? 'Invalid address — Stellar addresses start with G and are 56 characters long' :
                        'Error reading from contract'}
                     </p>
-                    <p className="mt-0.5 text-xs text-slate-500">Result returned by the Rust smart contract on Stellar Testnet</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {kycStatus === 'invalid'
+                        ? 'Check the address and try again.'
+                        : 'Result returned by the Rust smart contract on Stellar Testnet'}
+                    </p>
                   </div>
                 </div>
               )}
