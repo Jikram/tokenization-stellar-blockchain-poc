@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { checkApprovalStatus, approveUser, executeProtectedAction, fetchContractEvents } from '../lib/contract';
-import { connectFreighter, getFreighterPublicKey, isFreighterInstalled } from '../lib/freighter';
+import { connectFreighter, getFreighterPublicKey, checkFreighterInstalled } from '../lib/freighter';
 
 const NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'testnet';
 const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || 'Not set';
@@ -37,24 +37,23 @@ export default function Home() {
   const [hasFreighter, setHasFreighter] = useState(false);
 
   useEffect(() => {
-    setHasFreighter(isFreighterInstalled());
+    const checkAndSetFreighter = async () => {
+      const detected = await checkFreighterInstalled();
+      setHasFreighter(detected);
+      if (detected) {
+        getFreighterPublicKey()
+          .then((publicKey) => {
+            setWalletAddress(publicKey);
+            setConnected(true);
+          })
+          .catch(() => {
+            setConnected(false);
+          });
+      }
+    };
 
-    // Check for Freighter periodically in case user installs it
-    const interval = setInterval(() => {
-      setHasFreighter(isFreighterInstalled());
-    }, 2000);
-
-    if (typeof window !== 'undefined' && (window as any).freighterApi) {
-      getFreighterPublicKey()
-        .then((publicKey) => {
-          setWalletAddress(publicKey);
-          setConnected(true);
-        })
-        .catch(() => {
-          setConnected(false);
-        });
-    }
-
+    checkAndSetFreighter();
+    const interval = setInterval(checkAndSetFreighter, 2000);
     return () => clearInterval(interval);
   }, []);
 
@@ -195,41 +194,17 @@ export default function Home() {
                   and refresh the page.
                 </p>
                 <button
-                  onClick={() => {
-                    const freighterFound = isFreighterInstalled();
+                  onClick={async () => {
+                    const freighterFound = await checkFreighterInstalled();
                     setHasFreighter(freighterFound);
-                    if (!freighterFound) {
-                      const debugInfo = {
-                        hasWindow: typeof window !== 'undefined',
-                        hasFreighterApi: Boolean((window as any).freighterApi),
-                        hasFreighter: Boolean((window as any).freighter),
-                        hasStellar: Boolean((window as any).stellar),
-                        hasLobstr: Boolean((window as any).lobstr),
-                        hasXbull: Boolean((window as any).xbull),
-                        userAgent: navigator.userAgent.substring(0, 50) + '...',
-                        isExtensionBrowser: typeof (window as any).chrome !== 'undefined' ||
-                                           typeof (window as any).browser !== 'undefined' ||
-                                           typeof (window as any).safari !== 'undefined' ||
-                                           navigator.userAgent.includes('Chrome') ||
-                                           navigator.userAgent.includes('Firefox') ||
-                                           navigator.userAgent.includes('Safari') ||
-                                           navigator.userAgent.includes('Edge'),
-                        location: window.location.href
-                      };
-                      pushActivity({
-                        timestamp: new Date().toISOString(),
-                        type: 'freighter_check',
-                        status: 'error',
-                        message: `Freighter not detected. Debug: ${JSON.stringify(debugInfo)}`
-                      });
-                    } else {
-                      pushActivity({
-                        timestamp: new Date().toISOString(),
-                        type: 'freighter_check',
-                        status: 'success',
-                        message: 'Freighter detected successfully!'
-                      });
-                    }
+                    pushActivity({
+                      timestamp: new Date().toISOString(),
+                      type: 'freighter_check',
+                      status: freighterFound ? 'success' : 'error',
+                      message: freighterFound
+                        ? 'Freighter detected successfully!'
+                        : 'Freighter not detected. Make sure the extension is installed and the page is not running on a file:// URL.',
+                    });
                   }}
                   className="text-sm px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition"
                 >
