@@ -25,12 +25,50 @@ type ContractEvent = {
   inSuccessfulContractCall: boolean;
 };
 
+const EVENT_LABELS: Record<string, string> = {
+  init: 'Contract Initialized',
+  apprv: 'Investor Whitelisted',
+  prot_exec: 'Asset Accessed',
+};
+
+function shortenAddress(addr: string): string {
+  return addr.length > 20 ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : addr;
+}
+
+function formatEventValue(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.map((v) => (typeof v === 'string' ? shortenAddress(v) : String(v))).join(', ');
+    }
+    if (typeof parsed === 'string') return shortenAddress(parsed);
+    return JSON.stringify(parsed);
+  } catch {
+    return typeof raw === 'string' ? shortenAddress(raw) : raw;
+  }
+}
+
+function Badge({ label, variant }: { label: string; variant: 'get' | 'set' | 'execute' }) {
+  const styles = {
+    get: 'bg-blue-500/15 text-blue-300 border border-blue-500/30',
+    set: 'bg-amber-500/15 text-amber-300 border border-amber-500/30',
+    execute: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30',
+  };
+  return (
+    <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-widest ${styles[variant]}`}>
+      {label}
+    </span>
+  );
+}
+
 export default function Home() {
   const [walletAddress, setWalletAddress] = useState<string>('');
   const [connected, setConnected] = useState(false);
-  const [approvalStatus, setApprovalStatus] = useState<string>('Unknown');
-  const [actionState, setActionState] = useState<string>('Idle');
-  const [adminTarget, setAdminTarget] = useState('');
+  const [kycCheckTarget, setKycCheckTarget] = useState('');
+  const [kycStatus, setKycStatus] = useState<string | null>(null);
+  const [actionState, setActionState] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<boolean | null>(null);
+  const [whitelistTarget, setWhitelistTarget] = useState('');
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [contractEvents, setContractEvents] = useState<ContractEvent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -46,12 +84,9 @@ export default function Home() {
             setWalletAddress(publicKey);
             setConnected(true);
           })
-          .catch(() => {
-            setConnected(false);
-          });
+          .catch(() => setConnected(false));
       }
     };
-
     checkAndSetFreighter();
     const interval = setInterval(checkAndSetFreighter, 2000);
     return () => clearInterval(interval);
@@ -67,32 +102,30 @@ export default function Home() {
       const publicKey = await connectFreighter();
       setWalletAddress(publicKey);
       setConnected(true);
-      pushActivity({ timestamp: new Date().toISOString(), type: 'wallet_connect', status: 'success', message: `Freighter connected: ${publicKey}` });
+      pushActivity({ timestamp: new Date().toISOString(), type: 'wallet_connect', status: 'success', message: `Wallet connected: ${publicKey.slice(0, 8)}...${publicKey.slice(-4)}` });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to connect Freighter';
+      const message = error instanceof Error ? error.message : 'Failed to connect wallet';
       pushActivity({ timestamp: new Date().toISOString(), type: 'wallet_connect', status: 'error', message });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleApprovalCheck = async () => {
+  const handleKycCheck = async () => {
+    const target = kycCheckTarget.trim() || walletAddress;
+    if (!target) return;
     setLoading(true);
-    setActionState('Checking approval status...');
+    setKycStatus(null);
     try {
-      if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID is not configured.');
-      if (!walletAddress) throw new Error('Connect Freighter first.');
-
-      pushActivity({ timestamp: new Date().toISOString(), type: 'status_check', status: 'pending', message: 'Querying approval status' });
-      const isApproved = await checkApprovalStatus(walletAddress);
-      setApprovalStatus(isApproved ? 'Approved' : 'Not approved');
-      pushActivity({ timestamp: new Date().toISOString(), type: 'status_check', status: 'success', message: `Wallet is ${isApproved ? 'approved' : 'not approved'}` });
-      setActionState('Approval status loaded');
+      if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID not configured.');
+      pushActivity({ timestamp: new Date().toISOString(), type: 'kyc_check', status: 'pending', message: `Reading KYC status for ${target.slice(0, 8)}...` });
+      const isApproved = await checkApprovalStatus(target);
+      setKycStatus(isApproved ? 'approved' : 'not_approved');
+      pushActivity({ timestamp: new Date().toISOString(), type: 'kyc_check', status: 'success', message: `${target.slice(0, 8)}... is ${isApproved ? 'KYC approved ✓' : 'not KYC approved ✗'}` });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Approval check failed';
-      setApprovalStatus('Error');
-      setActionState('Approval check error');
-      pushActivity({ timestamp: new Date().toISOString(), type: 'status_check', status: 'error', message });
+      const message = error instanceof Error ? error.message : 'KYC check failed';
+      setKycStatus('error');
+      pushActivity({ timestamp: new Date().toISOString(), type: 'kyc_check', status: 'error', message });
     } finally {
       setLoading(false);
     }
@@ -100,46 +133,62 @@ export default function Home() {
 
   const handleExecuteAction = async () => {
     setLoading(true);
-    setActionState('Executing protected action...');
+    setActionState(null);
+    setActionSuccess(null);
     try {
-      if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID is not configured.');
-      if (!walletAddress) throw new Error('Connect Freighter first.');
-
-      pushActivity({ timestamp: new Date().toISOString(), type: 'execute_action', status: 'pending', message: 'Submitting protected action' });
+      if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID not configured.');
+      if (!walletAddress) throw new Error('Connect your wallet first.');
+      pushActivity({ timestamp: new Date().toISOString(), type: 'asset_access', status: 'pending', message: 'Requesting access to tokenized asset...' });
       const result = await executeProtectedAction(walletAddress);
-      const txHash = result.sendTransactionResponse?.hash || result.getTransactionResponse?.hash || 'unknown';
-      pushActivity({ timestamp: new Date().toISOString(), type: 'execute_action', status: 'success', message: 'Protected action executed', txHash });
-      setActionState('Protected action executed');
+      const txHash = result.sendTransactionResponse?.hash || result.getTransactionResponse?.hash;
+      setActionState('Access granted — transaction confirmed on Stellar Testnet.');
+      setActionSuccess(true);
+      pushActivity({ timestamp: new Date().toISOString(), type: 'asset_access', status: 'success', message: 'Asset access granted by smart contract', txHash });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Protected action failed';
-      pushActivity({ timestamp: new Date().toISOString(), type: 'execute_action', status: 'error', message });
-      setActionState('Execution failed');
+      const raw = error instanceof Error ? error.message : '';
+      const isAccessDenied =
+        raw.includes('not approved') ||
+        raw.includes('UnreachableCodeReached') ||
+        raw.includes('WasmVm') ||
+        raw.includes('execute_action');
+      const message = isAccessDenied
+        ? 'Access denied — this wallet has not been KYC approved by the asset issuer.'
+        : raw || 'Access denied';
+      setActionState(message);
+      setActionSuccess(false);
+      pushActivity({ timestamp: new Date().toISOString(), type: 'asset_access', status: 'error', message });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleApproveUser = async () => {
+  const handleWhitelistUser = async () => {
     setLoading(true);
     try {
-      if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID is not configured.');
-      if (!walletAddress) throw new Error('Connect Freighter first.');
-      if (!adminTarget.trim()) throw new Error('Enter a wallet address to approve.');
-
-      pushActivity({ timestamp: new Date().toISOString(), type: 'approve_user', status: 'pending', message: `Approving user: ${adminTarget}` });
-
-      const result = await approveUser(walletAddress, adminTarget.trim());
+      if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID not configured.');
+      if (!walletAddress) throw new Error('Connect your wallet first.');
+      if (!whitelistTarget.trim()) throw new Error('Enter an investor wallet address.');
+      pushActivity({ timestamp: new Date().toISOString(), type: 'whitelist', status: 'pending', message: `Writing KYC approval for ${whitelistTarget.slice(0, 8)}...` });
+      const result = await approveUser(walletAddress, whitelistTarget.trim());
       pushActivity({
         timestamp: new Date().toISOString(),
-        type: 'approve_user',
+        type: 'whitelist',
         status: 'success',
-        message: `User approved: ${adminTarget}`,
-        txHash: result.result?.transactionHash
+        message: `Investor whitelisted on-chain: ${whitelistTarget.slice(0, 8)}...`,
+        txHash: result.result?.transactionHash,
       });
-      setAdminTarget('');
+      setWhitelistTarget('');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Approval failed';
-      pushActivity({ timestamp: new Date().toISOString(), type: 'approve_user', status: 'error', message });
+      const raw = error instanceof Error ? error.message : '';
+      const isNotAdmin =
+        raw.includes('UnreachableCodeReached') ||
+        raw.includes('WasmVm') ||
+        raw.includes('approve_user') ||
+        raw.includes('only admin');
+      const message = isNotAdmin
+        ? 'Only the admin wallet can whitelist investors. Switch to the admin wallet in Freighter.'
+        : raw || 'Whitelist failed';
+      pushActivity({ timestamp: new Date().toISOString(), type: 'whitelist', status: 'error', message });
     } finally {
       setLoading(false);
     }
@@ -148,10 +197,10 @@ export default function Home() {
   const handleFetchEvents = async () => {
     setLoading(true);
     try {
-      pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'pending', message: 'Fetching contract events' });
+      pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'pending', message: 'Fetching on-chain events...' });
       const events = await fetchContractEvents(20);
       setContractEvents(events);
-      pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'success', message: `Fetched ${events.length} events` });
+      pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'success', message: `Loaded ${events.length} contract events` });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fetch events';
       pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'error', message });
@@ -163,203 +212,302 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
       <div className="mx-auto max-w-7xl px-6 py-10">
-        <header className="mb-10 flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/80 p-8 shadow-2xl shadow-slate-950/20">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+
+        {/* Header */}
+        <header className="mb-8 flex flex-col gap-6 rounded-3xl border border-slate-800 bg-slate-900/80 p-8 shadow-2xl">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-sm uppercase tracking-[0.3em] text-cyan-400">Stellar Soroban Demo</p>
-              <h1 className="mt-3 text-4xl font-semibold text-white">Tokenization Control POC</h1>
+              <p className="text-sm uppercase tracking-[0.3em] text-cyan-400">Stellar Soroban · Rust Smart Contract</p>
+              <h1 className="mt-3 text-4xl font-semibold text-white">Tokenized Asset Access Control</h1>
               <p className="mt-3 max-w-2xl text-slate-400">
-                Public demo of an approval-control smart contract with Freighter wallet, Soroban RPC, and a modern React interface.
+                A regulated tokenized asset on Stellar Testnet. Investor wallets must be KYC-approved on-chain before they can access the asset — enforced by a Rust smart contract, not a database.
               </p>
             </div>
-            <button
-              onClick={handleConnect}
-              disabled={loading || !hasFreighter}
-              className="inline-flex items-center justify-center rounded-full bg-cyan-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {connected ? 'Reconnect Wallet' : 'Connect Freighter'}
-            </button>
-            {!hasFreighter && (
-              <div className="mt-3 space-y-2">
-                <p className="text-sm text-amber-400">
-                  Freighter wallet extension required.{' '}
-                  <a
-                    href="https://www.freighter.app/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline hover:text-amber-300"
-                  >
-                    Install Freighter
-                  </a>{' '}
-                  and refresh the page.
+            <div className="flex flex-col gap-3 sm:items-end">
+              <button
+                onClick={handleConnect}
+                disabled={loading || !hasFreighter}
+                className="inline-flex items-center justify-center rounded-full bg-cyan-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {connected ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : 'Connect Freighter'}
+              </button>
+              {!hasFreighter && (
+                <p className="text-xs text-amber-400">
+                  <a href="https://www.freighter.app/" target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-300">Install Freighter</a> to interact with the contract.
                 </p>
-                <button
-                  onClick={async () => {
-                    const freighterFound = await checkFreighterInstalled();
-                    setHasFreighter(freighterFound);
-                    pushActivity({
-                      timestamp: new Date().toISOString(),
-                      type: 'freighter_check',
-                      status: freighterFound ? 'success' : 'error',
-                      message: freighterFound
-                        ? 'Freighter detected successfully!'
-                        : 'Freighter not detected. Make sure the extension is installed and the page is not running on a file:// URL.',
-                    });
-                  }}
-                  className="text-sm px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition"
-                >
-                  Check Again
-                </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="rounded-3xl border border-slate-800 bg-slate-950/80 p-5">
-              <p className="text-sm text-slate-400">Connected Wallet</p>
-              <p className="mt-2 text-sm font-semibold text-white">{walletAddress || 'Not connected'}</p>
+
+          {/* Demo flow strip */}
+          <div className="grid gap-3 sm:grid-cols-4">
+            {[
+              { step: '1', label: 'Admin whitelists their own wallet', action: 'SET — issuer self-approves', color: 'amber' },
+              { step: '2', label: 'Admin whitelists an investor wallet', action: 'SET — writes to chain', color: 'amber' },
+              { step: '3', label: 'Anyone reads KYC status of a wallet', action: 'GET — reads from chain', color: 'blue' },
+              { step: '4', label: 'Approved wallet accesses the asset', action: 'EXECUTE — contract enforces rule', color: 'emerald' },
+            ].map(({ step, label, action, color }) => (
+              <div key={step} className={`rounded-2xl border border-slate-800 bg-slate-950/60 p-4`}>
+                <p className={`text-xs font-bold uppercase tracking-widest text-${color}-400`}>Step {step}</p>
+                <p className="mt-1 text-sm font-medium text-white">{label}</p>
+                <p className={`mt-1 text-xs text-${color}-400/70`}>{action}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Info strip */}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+              <p className="text-xs text-slate-400 uppercase tracking-widest">Connected Wallet</p>
+              <p className="mt-1 text-sm font-semibold text-white truncate">{walletAddress || 'Not connected'}</p>
             </div>
-            <div className="rounded-3xl border border-slate-800 bg-slate-950/80 p-5">
-              <p className="text-sm text-slate-400">Contract ID</p>
-              <p className="mt-2 text-sm font-semibold text-white break-all">{CONTRACT_ID}</p>
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+              <p className="text-xs text-slate-400 uppercase tracking-widest">Contract ID</p>
+              <p className="mt-1 text-xs font-semibold text-white break-all">{CONTRACT_ID}</p>
             </div>
-            <div className="rounded-3xl border border-slate-800 bg-slate-950/80 p-5">
-              <p className="text-sm text-slate-400">Network</p>
-              <p className="mt-2 text-sm font-semibold text-white">{NETWORK}</p>
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+              <p className="text-xs text-slate-400 uppercase tracking-widest">Network</p>
+              <p className="mt-1 text-sm font-semibold text-white capitalize">{NETWORK}</p>
             </div>
           </div>
         </header>
 
         <section className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]">
           <div className="space-y-6">
-            <article className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl shadow-slate-950/10">
-              <div className="flex items-center justify-between gap-4">
+
+            {/* GET — KYC Status Check */}
+            <article className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl">
+              <div className="flex items-start justify-between gap-4">
                 <div>
-                  <h2 className="text-2xl font-semibold text-white">Approval Control</h2>
-                  <p className="mt-2 text-sm text-slate-400">Interact with the contract and verify which users can execute protected actions.</p>
-                </div>
-                <span className="rounded-full bg-cyan-500/15 px-3 py-1 text-xs uppercase tracking-[0.2em] text-cyan-300">Demo Ready</span>
-              </div>
-
-              <div className="mt-8 grid gap-4 sm:grid-cols-2">
-                <button
-                  disabled={loading || !connected}
-                  onClick={handleApprovalCheck}
-                  className="rounded-2xl bg-slate-800 px-5 py-4 text-left text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <p className="font-semibold">Check Approval Status</p>
-                  <p className="mt-2 text-sm text-slate-400">Read approval state from the contract for the connected wallet.</p>
-                </button>
-                <button
-                  disabled={loading || !connected}
-                  onClick={handleExecuteAction}
-                  className="rounded-2xl bg-cyan-500 px-5 py-4 text-left text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <p className="font-semibold">Execute Protected Action</p>
-                  <p className="mt-2 text-sm text-slate-700">Run the contract guard to verify user authorization.</p>
-                </button>
-              </div>
-
-              <div className="mt-8 rounded-3xl border border-slate-800 bg-slate-950/70 p-6">
-                <p className="text-sm uppercase tracking-[0.24em] text-slate-400">Status</p>
-                <div className="mt-3 flex flex-wrap gap-3 text-sm text-white">
-                  <span className="rounded-full bg-slate-800 px-4 py-2">Approval: {approvalStatus}</span>
-                  <span className="rounded-full bg-slate-800 px-4 py-2">Action: {actionState}</span>
-                  <span className="rounded-full bg-slate-800 px-4 py-2">Mode: {NETWORK}</span>
+                  <div className="flex items-center gap-2">
+                    <Badge label="GET" variant="get" />
+                    <h2 className="text-xl font-semibold text-white">Check KYC Status</h2>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-400">
+                    Read directly from the smart contract whether a wallet is cleared to hold this tokenized asset. No wallet connection required.
+                  </p>
                 </div>
               </div>
-            </article>
-
-            <article className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl shadow-slate-950/10">
-              <h3 className="text-xl font-semibold text-white">Admin Approval</h3>
-              <p className="mt-2 text-sm text-slate-400">Approve a new wallet address if you are the admin.</p>
-              <div className="mt-6 grid gap-4 sm:grid-cols-[1fr_auto]">
+              <div className="mt-6 grid gap-3 sm:grid-cols-[1fr_auto]">
                 <input
-                  value={adminTarget}
-                  onChange={(event) => setAdminTarget(event.target.value)}
-                  placeholder="Stellar address to approve"
-                  className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none focus:border-cyan-400"
+                  value={kycCheckTarget}
+                  onChange={(e) => setKycCheckTarget(e.target.value)}
+                  placeholder={walletAddress || 'Paste any Stellar wallet address…'}
+                  className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-blue-400 placeholder:text-slate-600"
                 />
                 <button
-                  onClick={handleApproveUser}
-                  disabled={loading || !connected}
-                  className="rounded-2xl bg-slate-800 px-5 py-3 text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={handleKycCheck}
+                  disabled={loading || (!kycCheckTarget.trim() && !walletAddress)}
+                  className="rounded-2xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Approve User
+                  Read Chain
                 </button>
               </div>
-              <p className="mt-4 text-sm text-slate-500">Only the admin wallet can invoke the approval function.</p>
+              <p className="mt-2 text-xs text-slate-500">Leave blank to check your connected wallet.</p>
+
+              {kycStatus && (
+                <div className={`mt-4 rounded-2xl p-4 flex items-center gap-3 ${
+                  kycStatus === 'approved' ? 'bg-emerald-500/10 border border-emerald-500/30' :
+                  kycStatus === 'not_approved' ? 'bg-red-500/10 border border-red-500/30' :
+                  'bg-slate-800 border border-slate-700'
+                }`}>
+                  <span className="text-2xl">{kycStatus === 'approved' ? '✓' : kycStatus === 'not_approved' ? '✗' : '!'}</span>
+                  <div>
+                    <p className={`text-sm font-semibold ${kycStatus === 'approved' ? 'text-emerald-300' : kycStatus === 'not_approved' ? 'text-red-300' : 'text-slate-300'}`}>
+                      {kycStatus === 'approved' ? 'KYC Approved — wallet is whitelisted on-chain' :
+                       kycStatus === 'not_approved' ? 'Not Approved — wallet has not been KYC cleared' :
+                       'Error reading from contract'}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">Result returned by the Rust smart contract on Stellar Testnet</p>
+                  </div>
+                </div>
+              )}
+            </article>
+
+            {/* SET — Whitelist Investor */}
+            <article className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Badge label="SET" variant="set" />
+                    <h2 className="text-xl font-semibold text-white">Whitelist Investor</h2>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-400">
+                    As the asset issuer (admin), KYC-approve an investor wallet. This writes a permanent record to the Stellar blockchain — the wallet can now access the tokenized asset.
+                  </p>
+                </div>
+              </div>
+
+              {/* Admin self-whitelist tip */}
+              {connected && (
+                <div className="mt-5 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+                  <p className="text-xs font-semibold text-amber-400 uppercase tracking-widest">Demo tip — Step 1</p>
+                  <p className="mt-1 text-sm text-slate-300">
+                    The admin wallet is not whitelisted by default. Whitelist yourself first so you can also demo the Execute step.
+                  </p>
+                  <button
+                    onClick={() => setWhitelistTarget(walletAddress)}
+                    className="mt-3 rounded-full border border-amber-500/30 px-4 py-1.5 text-xs font-semibold text-amber-400 transition hover:bg-amber-500/10"
+                  >
+                    Pre-fill my address
+                  </button>
+                </div>
+              )}
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto]">
+                <input
+                  value={whitelistTarget}
+                  onChange={(e) => setWhitelistTarget(e.target.value)}
+                  placeholder="Investor wallet address to approve…"
+                  className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-amber-400 placeholder:text-slate-600"
+                />
+                <button
+                  onClick={handleWhitelistUser}
+                  disabled={loading || !connected}
+                  className="rounded-2xl bg-amber-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Write to Chain
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                Requires admin wallet. Freighter will prompt you to sign the transaction before it is submitted to Stellar.
+              </p>
+            </article>
+
+            {/* EXECUTE — Access Tokenized Asset */}
+            <article className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Badge label="EXECUTE" variant="execute" />
+                    <h2 className="text-xl font-semibold text-white">Access Tokenized Asset</h2>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-400">
+                    Simulate an investor interacting with the tokenized asset. The smart contract checks on-chain KYC status and either grants or denies access — no off-chain database involved.
+                  </p>
+                </div>
+                <button
+                  onClick={handleExecuteAction}
+                  disabled={loading || !connected}
+                  className="shrink-0 rounded-2xl bg-emerald-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Execute
+                </button>
+              </div>
+
+              {actionState && (
+                <div className={`mt-6 rounded-2xl p-4 flex items-start gap-3 ${
+                  actionSuccess ? 'bg-emerald-500/10 border border-emerald-500/30' : 'bg-red-500/10 border border-red-500/30'
+                }`}>
+                  <span className="text-2xl mt-0.5">{actionSuccess ? '✓' : '✗'}</span>
+                  <div>
+                    <p className={`text-sm font-semibold ${actionSuccess ? 'text-emerald-300' : 'text-red-300'}`}>
+                      {actionState}
+                    </p>
+                    {actionSuccess && (
+                      <p className="mt-0.5 text-xs text-slate-500">Access enforced by the Rust contract — not middleware or a backend API.</p>
+                    )}
+                  </div>
+                </div>
+              )}
             </article>
           </div>
 
+          {/* Right sidebar */}
           <aside className="space-y-6">
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl shadow-slate-950/10">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-sm uppercase tracking-[0.24em] text-cyan-400">Mock Oracle</p>
-                  <h3 className="mt-2 text-2xl font-semibold text-white">Tokenized Asset Price</h3>
-                </div>
+
+            {/* Asset NAV Feed */}
+            <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl">
+              <p className="text-xs uppercase tracking-widest text-cyan-400">Mock Oracle</p>
+              <h3 className="mt-2 text-xl font-semibold text-white">Asset NAV Feed</h3>
+              <p className="mt-1 text-sm text-slate-400">Tokenized Real Estate Fund · Series A</p>
+              <div className="mt-6 rounded-2xl bg-slate-950/80 p-6 text-center">
+                <p className="text-xs uppercase tracking-widest text-slate-400">Net Asset Value / Unit</p>
+                <p className="mt-3 text-5xl font-semibold text-white">$100.00</p>
+                <p className="mt-2 text-xs text-slate-500">Simulated price feed · Testnet only</p>
               </div>
-              <div className="mt-8 rounded-3xl bg-slate-950/80 p-6 text-center">
-                <p className="text-sm uppercase tracking-[0.24em] text-slate-400">Price Signal</p>
-                <p className="mt-4 text-5xl font-semibold text-white">$100.00</p>
-                <p className="mt-2 text-sm text-slate-500">Mock price feed for asset tokenization use cases.</p>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="rounded-2xl bg-slate-950/60 p-3 text-center">
+                  <p className="text-xs text-slate-400">Asset Type</p>
+                  <p className="mt-1 text-sm font-semibold text-white">Real Estate</p>
+                </div>
+                <div className="rounded-2xl bg-slate-950/60 p-3 text-center">
+                  <p className="text-xs text-slate-400">Access</p>
+                  <p className="mt-1 text-sm font-semibold text-white">KYC Gated</p>
+                </div>
               </div>
             </div>
 
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl shadow-slate-950/10">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-sm uppercase tracking-[0.24em] text-cyan-400">Activity</p>
-                  <h3 className="mt-2 text-2xl font-semibold text-white">Recent Events</h3>
-                </div>
-              </div>
-              <div className="mt-6 space-y-4">
+            {/* Activity */}
+            <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl">
+              <p className="text-xs uppercase tracking-widest text-cyan-400">Activity</p>
+              <h3 className="mt-2 text-xl font-semibold text-white">Transaction Log</h3>
+              <div className="mt-5 space-y-3">
                 {activity.length === 0 ? (
-                  <div className="rounded-3xl bg-slate-950/80 p-5 text-sm text-slate-500">No activity yet. Connect Freighter to start.</div>
+                  <div className="rounded-2xl bg-slate-950/80 p-4 text-sm text-slate-500">
+                    No activity yet. Connect Freighter and interact with the contract.
+                  </div>
                 ) : (
                   activity.map((entry, index) => (
-                    <div key={index} className="rounded-3xl border border-slate-800 bg-slate-950/80 p-4">
-                      <p className="text-sm font-semibold text-white">{entry.type}</p>
-                      <p className="mt-1 text-sm text-slate-400">{entry.message}</p>
-                      <div className="mt-3 flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-500">
-                        <span>{entry.status}</span>
-                        <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
+                    <div key={index} className={`rounded-2xl border p-4 ${
+                      entry.status === 'success' ? 'border-emerald-500/20 bg-slate-950/60' :
+                      entry.status === 'error' ? 'border-red-500/20 bg-slate-950/60' :
+                      'border-slate-700 bg-slate-950/60'
+                    }`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">{entry.type.replace(/_/g, ' ')}</p>
+                        <span className={`text-xs font-semibold ${
+                          entry.status === 'success' ? 'text-emerald-400' :
+                          entry.status === 'error' ? 'text-red-400' :
+                          'text-amber-400'
+                        }`}>{entry.status}</span>
                       </div>
-                      {entry.txHash ? <p className="mt-2 text-xs text-slate-500">Tx: {entry.txHash}</p> : null}
+                      <p className="mt-1 text-sm text-slate-300">{entry.message}</p>
+                      {entry.txHash && <p className="mt-1.5 text-xs text-slate-500 truncate">Tx: {entry.txHash}</p>}
+                      <p className="mt-1 text-xs text-slate-600">{new Date(entry.timestamp).toLocaleTimeString()}</p>
                     </div>
                   ))
                 )}
               </div>
             </div>
 
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl shadow-slate-950/10">
+            {/* On-Chain Events */}
+            <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl">
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <p className="text-sm uppercase tracking-[0.24em] text-cyan-400">On-Chain</p>
-                  <h3 className="mt-2 text-2xl font-semibold text-white">Contract Events</h3>
+                  <p className="text-xs uppercase tracking-widest text-cyan-400">On-Chain</p>
+                  <h3 className="mt-2 text-xl font-semibold text-white">Contract Events</h3>
                 </div>
                 <button
                   onClick={handleFetchEvents}
                   disabled={loading}
-                  className="rounded-full bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-full bg-cyan-500 px-4 py-2 text-xs font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Fetch Events
+                  Fetch
                 </button>
               </div>
-              <div className="mt-6 space-y-4">
+              <div className="mt-5 space-y-3">
                 {contractEvents.length === 0 ? (
-                  <div className="rounded-3xl bg-slate-950/80 p-5 text-sm text-slate-500">No events fetched yet. Click "Fetch Events" to load from the blockchain.</div>
+                  <div className="rounded-2xl bg-slate-950/80 p-4 text-sm text-slate-500">
+                    No events loaded. Click Fetch to read from the blockchain.
+                  </div>
                 ) : (
-                  contractEvents.map((event, index) => (
-                    <div key={index} className="rounded-3xl border border-slate-800 bg-slate-950/80 p-4">
-                      <p className="text-sm font-semibold text-white">{event.topic.join(' ')}</p>
-                      <p className="mt-1 text-sm text-slate-400">{event.value}</p>
-                      <div className="mt-3 flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-500">
-                        <span>Ledger {event.ledger}</span>
-                        <span>{event.inSuccessfulContractCall ? 'Success' : 'Failed'}</span>
+                  contractEvents.map((event, index) => {
+                    const topicKey = event.topic[0] ?? '';
+                    const label = EVENT_LABELS[topicKey] ?? topicKey;
+                    return (
+                      <div key={index} className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-widest text-cyan-400">{label}</p>
+                        <p className="mt-1 text-sm text-slate-300 truncate">{formatEventValue(event.value)}</p>
+                        <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                          <span>Ledger {event.ledger}</span>
+                          <span className={event.inSuccessfulContractCall ? 'text-emerald-400' : 'text-red-400'}>
+                            {event.inSuccessfulContractCall ? 'Success' : 'Failed'}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
