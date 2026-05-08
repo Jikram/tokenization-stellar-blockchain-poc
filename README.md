@@ -45,7 +45,18 @@ Public Stellar Soroban demo proof-of-concept showing tokenization-style approval
    ./scripts/deploy-testnet.sh
    ```
 
-4. Copy the deployed contract ID into `frontend/.env.local`:
+4. Initialize the contract (once after deploy):
+   ```bash
+   stellar contract invoke \
+     --id YOUR_CONTRACT_ID \
+     --source YOUR_ACCOUNT \
+     --network testnet \
+     -- initialize \
+     --admin YOUR_ADMIN_ADDRESS \
+     --asset_name "Tokenized Real Estate Fund Series A"
+   ```
+
+5. Copy the deployed contract ID into `frontend/.env.local`:
    ```text
    NEXT_PUBLIC_CONTRACT_ID=YOUR_CONTRACT_ID_HERE
    ```
@@ -58,6 +69,31 @@ Public Stellar Soroban demo proof-of-concept showing tokenization-style approval
    ```
 
 6. Open the app and connect with Freighter on Stellar Testnet.
+
+## Contract functions
+
+| Function | Type | Description |
+|---|---|---|
+| `initialize(admin, asset_name)` | Write | Deploy-time setup — sets admin wallet and asset name |
+| `approve_user(admin, user)` | Write | Admin whitelists an investor wallet on-chain |
+| `is_approved(user)` | Read | Returns whether a wallet is KYC approved |
+| `execute_action(user)` | Execute | Enforces KYC gate — reverts if wallet not approved |
+
+## Contract events and emitted data types
+
+Each function emits an on-chain event. The table below shows every field and its Soroban `ScVal` type — useful for Substreams decoders and indexers.
+
+| Event | Topic | Value fields | ScVal types |
+|---|---|---|---|
+| `init` | `Symbol("init")` | admin address, asset name, deploy ledger | `Address`, `String`, `u32` |
+| `apprv` | `Symbol("apprv")` | admin address, user address, approved flag, ledger, timestamp | `Address`, `Address`, `bool`, `u32`, `u64` |
+| `prot_exec` | `Symbol("prot_exec")` | user address, NAV price (cents), timestamp | `Address`, `i128`, `u64` |
+
+**Type coverage:** `Symbol`, `Address`, `String`, `bool`, `u32`, `u64`, `i128`
+
+The NAV price is represented as `i128` in cents (`10000` = $100.00). Timestamps are Unix seconds as `u64`. The ledger sequence is `u32`.
+
+> For Substreams teams: all values are XDR-encoded `ScVal`. Use `scValToNative` (JS SDK) or the Soroban XDR decoder for your language to deserialise. `u64` and `i128` deserialise as `BigInt` in JavaScript — handle accordingly.
 
 ## Notes
 

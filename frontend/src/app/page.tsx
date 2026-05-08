@@ -209,7 +209,14 @@ export default function Home() {
       setContractEvents(events);
       setFetchRange({ start: startLedger, end: endLedger });
       const initEvent = events.find((e) => e.topic[0] === 'init');
-      if (initEvent) setAdminAddress(initEvent.value);
+      if (initEvent) {
+        try {
+          const parsed = JSON.parse(initEvent.value);
+          setAdminAddress(Array.isArray(parsed) ? parsed[0] : initEvent.value);
+        } catch {
+          setAdminAddress(initEvent.value);
+        }
+      }
       pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'success', message: `Loaded ${events.length} contract events` });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fetch events';
