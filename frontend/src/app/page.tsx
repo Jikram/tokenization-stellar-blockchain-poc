@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { checkApprovalStatus, approveUser, executeProtectedAction } from '../lib/contract';
+import { checkApprovalStatus, approveUser, executeProtectedAction, fetchContractEvents } from '../lib/contract';
 import { connectFreighter, getFreighterPublicKey, isFreighterInstalled } from '../lib/freighter';
 
 const NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'testnet';
@@ -15,6 +15,16 @@ type ActivityEntry = {
   txHash?: string;
 };
 
+type ContractEvent = {
+  id: string;
+  type: string;
+  ledger: number;
+  contractId: string;
+  topic: string[];
+  value: string;
+  inSuccessfulContractCall: boolean;
+};
+
 export default function Home() {
   const [walletAddress, setWalletAddress] = useState<string>('');
   const [connected, setConnected] = useState(false);
@@ -22,11 +32,17 @@ export default function Home() {
   const [actionState, setActionState] = useState<string>('Idle');
   const [adminTarget, setAdminTarget] = useState('');
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
+  const [contractEvents, setContractEvents] = useState<ContractEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasFreighter, setHasFreighter] = useState(false);
 
   useEffect(() => {
     setHasFreighter(isFreighterInstalled());
+
+    // Check for Freighter periodically in case user installs it
+    const interval = setInterval(() => {
+      setHasFreighter(isFreighterInstalled());
+    }, 2000);
 
     if (typeof window !== 'undefined' && (window as any).freighterApi) {
       getFreighterPublicKey()
@@ -38,6 +54,8 @@ export default function Home() {
           setConnected(false);
         });
     }
+
+    return () => clearInterval(interval);
   }, []);
 
   const pushActivity = (entry: ActivityEntry) => {
@@ -104,22 +122,40 @@ export default function Home() {
 
   const handleApproveUser = async () => {
     setLoading(true);
-    setActionState('Approving user...');
     try {
       if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID is not configured.');
       if (!walletAddress) throw new Error('Connect Freighter first.');
-      if (!adminTarget) throw new Error('Enter a valid Stellar address to approve.');
+      if (!adminTarget.trim()) throw new Error('Enter a wallet address to approve.');
 
-      pushActivity({ timestamp: new Date().toISOString(), type: 'approve_user', status: 'pending', message: `Approving ${adminTarget}` });
-      const result = await approveUser(walletAddress, adminTarget);
-      const txHash = result.sendTransactionResponse?.hash || result.getTransactionResponse?.hash || 'unknown';
-      pushActivity({ timestamp: new Date().toISOString(), type: 'approve_user', status: 'success', message: `Approved ${adminTarget}`, txHash });
-      setActionState('User approved successfully');
+      pushActivity({ timestamp: new Date().toISOString(), type: 'approve_user', status: 'pending', message: `Approving user: ${adminTarget}` });
+
+      const result = await approveUser(walletAddress, adminTarget.trim());
+      pushActivity({
+        timestamp: new Date().toISOString(),
+        type: 'approve_user',
+        status: 'success',
+        message: `User approved: ${adminTarget}`,
+        txHash: result.result?.transactionHash
+      });
       setAdminTarget('');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Approve user failed';
+      const message = error instanceof Error ? error.message : 'Approval failed';
       pushActivity({ timestamp: new Date().toISOString(), type: 'approve_user', status: 'error', message });
-      setActionState('Approve failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFetchEvents = async () => {
+    setLoading(true);
+    try {
+      pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'pending', message: 'Fetching contract events' });
+      const events = await fetchContractEvents(20);
+      setContractEvents(events);
+      pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'success', message: `Fetched ${events.length} events` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch events';
+      pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'error', message });
     } finally {
       setLoading(false);
     }
@@ -139,11 +175,25 @@ export default function Home() {
             </div>
             <button
               onClick={handleConnect}
-              disabled={loading}
+              disabled={loading || !hasFreighter}
               className="inline-flex items-center justify-center rounded-full bg-cyan-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {connected ? 'Reconnect Wallet' : 'Connect Freighter'}
             </button>
+            {!hasFreighter && (
+              <p className="mt-3 text-sm text-amber-400">
+                Freighter wallet extension required.{' '}
+                <a
+                  href="https://www.freighter.app/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:text-amber-300"
+                >
+                  Install Freighter
+                </a>{' '}
+                and refresh the page.
+              </p>
+            )}
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="rounded-3xl border border-slate-800 bg-slate-950/80 p-5">
@@ -258,6 +308,38 @@ export default function Home() {
                         <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
                       </div>
                       {entry.txHash ? <p className="mt-2 text-xs text-slate-500">Tx: {entry.txHash}</p> : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl shadow-slate-950/10">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm uppercase tracking-[0.24em] text-cyan-400">On-Chain</p>
+                  <h3 className="mt-2 text-2xl font-semibold text-white">Contract Events</h3>
+                </div>
+                <button
+                  onClick={handleFetchEvents}
+                  disabled={loading}
+                  className="rounded-full bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Fetch Events
+                </button>
+              </div>
+              <div className="mt-6 space-y-4">
+                {contractEvents.length === 0 ? (
+                  <div className="rounded-3xl bg-slate-950/80 p-5 text-sm text-slate-500">No events fetched yet. Click "Fetch Events" to load from the blockchain.</div>
+                ) : (
+                  contractEvents.map((event, index) => (
+                    <div key={index} className="rounded-3xl border border-slate-800 bg-slate-950/80 p-4">
+                      <p className="text-sm font-semibold text-white">{event.topic.join(' ')}</p>
+                      <p className="mt-1 text-sm text-slate-400">{event.value}</p>
+                      <div className="mt-3 flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-500">
+                        <span>Ledger {event.ledger}</span>
+                        <span>{event.inSuccessfulContractCall ? 'Success' : 'Failed'}</span>
+                      </div>
                     </div>
                   ))
                 )}

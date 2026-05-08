@@ -15,13 +15,30 @@ declare global {
 
 export const isFreighterInstalled = (): boolean => {
   if (typeof window === 'undefined') return false;
+
+  // Check if we're in an environment that supports browser extensions
+  const hasExtensionSupport = typeof (window as any).chrome !== 'undefined' || typeof (window as any).browser !== 'undefined';
+  if (!hasExtensionSupport) {
+    return false; // Not a browser that supports extensions
+  }
+
   return Boolean(window.freighterApi);
 };
 
 const getFreighter = (): FreighterApi => {
-  if (typeof window === 'undefined' || !window.freighterApi) {
-    throw new Error('Freighter wallet not found. Install Freighter and refresh the page.');
+  if (typeof window === 'undefined') {
+    throw new Error('Freighter wallet requires a browser environment.');
   }
+
+  const hasExtensionSupport = typeof (window as any).chrome !== 'undefined' || typeof (window as any).browser !== 'undefined';
+  if (!hasExtensionSupport) {
+    throw new Error('Freighter wallet requires a browser that supports extensions (Chrome, Firefox, Edge, etc.). Please open this app in a compatible browser.');
+  }
+
+  if (!window.freighterApi) {
+    throw new Error('Freighter wallet not found. Please install the Freighter extension from https://www.freighter.app/ and refresh the page.');
+  }
+
   return window.freighterApi;
 };
 

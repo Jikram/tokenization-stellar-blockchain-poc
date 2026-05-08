@@ -1,4 +1,4 @@
-import { contract, Networks } from '@stellar/stellar-sdk';
+import { contract, Networks, rpc } from '@stellar/stellar-sdk';
 import { signWithFreighter } from './freighter';
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org';
@@ -79,4 +79,28 @@ export async function initializeContract(adminAddress: string) {
     submit: true,
   });
   return await assembled.signAndSend({ signTransaction: freighterSigner });
+}
+
+export async function fetchContractEvents(limit: number = 10): Promise<any[]> {
+  if (!CONTRACT_ID) throw new Error('NEXT_PUBLIC_CONTRACT_ID is not configured.');
+  const server = new rpc.Server(RPC_URL);
+  const events = await server.getEvents({
+    startLedger: 1,
+    filters: [
+      {
+        type: 'contract',
+        contractIds: [CONTRACT_ID],
+      },
+    ],
+    limit,
+  });
+  return events.events.map((event) => ({
+    id: event.id,
+    type: event.type,
+    ledger: event.ledger,
+    contractId: event.contractId,
+    topic: event.topic.map((t) => t.toString()),
+    value: event.value.toString(),
+    inSuccessfulContractCall: event.inSuccessfulContractCall,
+  }));
 }
