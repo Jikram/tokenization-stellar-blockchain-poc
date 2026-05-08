@@ -202,6 +202,10 @@ export default function Home() {
                       const debugInfo = {
                         hasWindow: typeof window !== 'undefined',
                         hasFreighterApi: Boolean((window as any).freighterApi),
+                        hasFreighter: Boolean((window as any).freighter),
+                        hasStellar: Boolean((window as any).stellar),
+                        hasLobstr: Boolean((window as any).lobstr),
+                        hasXbull: Boolean((window as any).xbull),
                         userAgent: navigator.userAgent.substring(0, 50) + '...',
                         isExtensionBrowser: typeof (window as any).chrome !== 'undefined' ||
                                            typeof (window as any).browser !== 'undefined' ||
@@ -209,7 +213,8 @@ export default function Home() {
                                            navigator.userAgent.includes('Chrome') ||
                                            navigator.userAgent.includes('Firefox') ||
                                            navigator.userAgent.includes('Safari') ||
-                                           navigator.userAgent.includes('Edge')
+                                           navigator.userAgent.includes('Edge'),
+                        location: window.location.href
                       };
                       pushActivity({
                         timestamp: new Date().toISOString(),

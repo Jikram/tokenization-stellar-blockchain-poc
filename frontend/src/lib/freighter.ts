@@ -18,8 +18,26 @@ export const isFreighterInstalled = (): boolean => {
 
   // First check if Freighter API is available
   if (Boolean(window.freighterApi)) {
+    console.log('Freighter detected: window.freighterApi found');
     return true;
   }
+
+  // Also check for alternative Freighter API names that might be used
+  if (Boolean((window as any).freighter) || Boolean((window as any).stellar)) {
+    console.log('Found alternative Freighter API:', { freighter: !!(window as any).freighter, stellar: !!(window as any).stellar });
+    return true;
+  }
+
+  // Check all possible extension APIs that might exist
+  const possibleAPIs = ['freighterApi', 'freighter', 'stellar', 'stellarWallet', 'lobstr', 'xbull'];
+  for (const api of possibleAPIs) {
+    if (Boolean((window as any)[api])) {
+      console.log(`Found wallet API: ${api}`);
+      return true;
+    }
+  }
+
+  console.log('No wallet APIs found on window object');
 
   // If not available, check if we're in a browser that should support extensions
   // This helps provide better error messages
