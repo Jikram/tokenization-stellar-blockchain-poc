@@ -5,6 +5,6 @@ set -euo pipefail
 cd "$(dirname "$0")"/../contracts/approval-control
 
 echo "Building ApprovalControlContract to WASM..."
-cargo build --target wasm32-unknown-unknown --release
+stellar contract build
 
-echo "Built file: target/wasm32-unknown-unknown/release/approval-control.wasm"
+echo "Built file: target/wasm32v1-none/release/approval_control.wasm"

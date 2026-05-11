@@ -26,49 +26,52 @@ Public Stellar Soroban demo proof-of-concept showing tokenization-style approval
 
 1. Install tooling:
    - Rust + `cargo`
-   - `wasm32-unknown-unknown` target
-   - Stellar CLI (or Soroban CLI if you prefer)
-   - Node.js 20+ and npm/yarn/pnpm
+   - Stellar CLI: `cargo install --locked stellar-cli --features opt`
+   - Node.js 20+ and npm
 
-2. Build the contract:
+   The contract compiles to `wasm32v1-none` (bare-metal WebAssembly for Soroban). `stellar contract build` handles this automatically — no need to install the target manually.
+
+2. Deploy everything (contract + frontend) in one command:
    ```bash
-   ./scripts/build-contract.sh
+   bash scripts/deploy-full.sh
    ```
-
-3. Deploy to testnet:
+   To skip checks for a faster deploy:
    ```bash
-   SOURCE_ACCOUNT=YOUR_DEPLOYER_ACCOUNT ./scripts/deploy-testnet.sh
+   bash scripts/deploy-full.sh --skip-checks
    ```
 
-   If you already have `STELLAR_ACCOUNT` configured in your environment, you can use:
-   ```bash
-   ./scripts/deploy-testnet.sh
-   ```
-
-4. Initialize the contract (once after deploy):
-   ```bash
-   stellar contract invoke \
-     --id YOUR_CONTRACT_ID \
-     --source YOUR_ACCOUNT \
-     --network testnet \
-     -- initialize \
-     --admin YOUR_ADMIN_ADDRESS \
-     --asset_name "Tokenized Real Estate Fund Series A"
-   ```
-
-5. Copy the deployed contract ID into `frontend/.env.local`:
-   ```text
-   NEXT_PUBLIC_CONTRACT_ID=YOUR_CONTRACT_ID_HERE
-   ```
-
-5. Run the frontend locally:
+3. Run the frontend locally:
    ```bash
    cd frontend
    npm install
    npm run dev
    ```
 
-6. Open the app and connect with Freighter on Stellar Testnet.
+4. Open the app and connect with Freighter on Stellar Testnet.
+
+## Code quality tools
+
+All checks run automatically as part of `deploy-full.sh`. To run them individually:
+
+```bash
+# Format check
+cargo fmt --check
+
+# Linter
+cargo clippy -- -D warnings -A deprecated
+
+# Unit + fuzz + invariant tests
+cargo test
+
+# Security audit
+cargo audit
+
+# Code coverage (summary)
+cargo llvm-cov --summary-only
+
+# Run all checks at once
+bash scripts/check-contract.sh
+```
 
 ## Contract functions
 
