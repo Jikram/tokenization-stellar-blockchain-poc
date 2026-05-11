@@ -26,6 +26,16 @@ async function freighterSigner(
   } as any);
 }
 
+export async function initializeContract(adminAddress: string, assetName: string) {
+  if (!adminAddress) throw new Error('Missing admin wallet address.');
+  const client = await getClient();
+  const assembled = await client.initialize(
+    { admin: adminAddress, asset_name: assetName },
+    { publicKey: adminAddress }
+  );
+  return await assembled.signAndSend({ signTransaction: freighterSigner });
+}
+
 export async function checkApprovalStatus(userAddress: string): Promise<boolean> {
   if (!userAddress) throw new Error('Missing wallet address.');
   const client = await getClient();
