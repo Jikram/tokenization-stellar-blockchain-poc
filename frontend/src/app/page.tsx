@@ -212,7 +212,9 @@ export default function Home() {
       if (initEvent) {
         try {
           const parsed = JSON.parse(initEvent.value);
-          setAdminAddress(Array.isArray(parsed) ? parsed[0] : initEvent.value);
+          // value shape: {"vec":[{"address":"G..."},{"string":"..."},{"u32":...}]}
+          const addr = parsed?.vec?.[0]?.address ?? (Array.isArray(parsed) ? parsed[0] : null);
+          setAdminAddress(addr ?? initEvent.value);
         } catch {
           setAdminAddress(initEvent.value);
         }
@@ -308,14 +310,24 @@ export default function Home() {
                 )}
               </div>
               {CONTRACT_ID && CONTRACT_ID !== 'Not set' && (
-                <a
-                  href={`https://stellar.expert/explorer/testnet/contract/${CONTRACT_ID}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-2 inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 transition"
-                >
-                  View on Stellar Expert ↗
-                </a>
+                <div className="mt-2 flex items-center gap-3">
+                  <a
+                    href={`https://stellar.expert/explorer/testnet/contract/${CONTRACT_ID}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 transition"
+                  >
+                    Stellar Expert ↗
+                  </a>
+                  <a
+                    href={`https://lab.stellar.org/r/testnet/contract/${CONTRACT_ID}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 transition"
+                  >
+                    Stellar Lab ↗
+                  </a>
+                </div>
               )}
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
