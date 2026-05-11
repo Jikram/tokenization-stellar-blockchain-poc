@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Map, String, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, Address, Env, Map, String, Symbol,
+};
 
 const TTL_THRESHOLD: u32 = 100;
 const TTL_EXTEND_TO: u32 = 3_110_400; // ~6 months at 5s/ledger
@@ -21,13 +23,18 @@ impl ApprovalControlContract {
         if admin_already_set {
             panic!("contract already initialized");
         }
-        env.storage().persistent().set(&DataKey::Admin, &admin.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::Admin, &admin.clone());
         env.storage()
             .persistent()
             .set(&DataKey::ApprovedUsers, &Map::<Address, bool>::new(&env));
         Self::extend_ttl(&env);
         // emits: Address (admin), String (asset name), u32 (deploy ledger)
-        env.events().publish((symbol_short!("init"),), (admin, asset_name, env.ledger().sequence()));
+        env.events().publish(
+            (symbol_short!("init"),),
+            (admin, asset_name, env.ledger().sequence()),
+        );
     }
 
     pub fn approve_user(env: Env, admin: Address, user: Address) {
@@ -38,21 +45,28 @@ impl ApprovalControlContract {
             .get(&DataKey::ApprovedUsers)
             .unwrap_or_else(|| Map::new(&env));
         approved.set(user.clone(), true);
-        env.storage().persistent().set(&DataKey::ApprovedUsers, &approved);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ApprovedUsers, &approved);
         Self::extend_ttl(&env);
         // emits: Address (admin), Address (user), bool (approved), u32 (ledger), u64 (unix timestamp)
-        env.events().publish((symbol_short!("apprv"),), (admin, user, true, env.ledger().sequence(), env.ledger().timestamp()));
+        env.events().publish(
+            (symbol_short!("apprv"),),
+            (
+                admin,
+                user,
+                true,
+                env.ledger().sequence(),
+                env.ledger().timestamp(),
+            ),
+        );
     }
 
     pub fn is_approved(env: Env, user: Address) -> bool {
         Self::extend_ttl(&env);
-        let approved: Option<Map<Address, bool>> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ApprovedUsers);
-        approved
-            .and_then(|map| map.get(user))
-            .unwrap_or(false)
+        let approved: Option<Map<Address, bool>> =
+            env.storage().persistent().get(&DataKey::ApprovedUsers);
+        approved.and_then(|map| map.get(user)).unwrap_or(false)
     }
 
     pub fn execute_action(env: Env, user: Address) -> Symbol {
@@ -61,7 +75,10 @@ impl ApprovalControlContract {
             panic!("user is not approved to execute this action");
         }
         // emits: Address (user), i128 (NAV price in cents, $100.00 = 10000), u64 (unix timestamp)
-        env.events().publish((symbol_short!("prot_exec"),), (user, 10000i128, env.ledger().timestamp()));
+        env.events().publish(
+            (symbol_short!("prot_exec"),),
+            (user, 10000i128, env.ledger().timestamp()),
+        );
         symbol_short!("exec")
     }
 }
@@ -79,12 +96,20 @@ impl ApprovalControlContract {
     }
 
     fn extend_ttl(env: &Env) {
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         if env.storage().persistent().has(&DataKey::Admin) {
-            env.storage().persistent().extend_ttl(&DataKey::Admin, TTL_THRESHOLD, TTL_EXTEND_TO);
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::Admin, TTL_THRESHOLD, TTL_EXTEND_TO);
         }
         if env.storage().persistent().has(&DataKey::ApprovedUsers) {
-            env.storage().persistent().extend_ttl(&DataKey::ApprovedUsers, TTL_THRESHOLD, TTL_EXTEND_TO);
+            env.storage().persistent().extend_ttl(
+                &DataKey::ApprovedUsers,
+                TTL_THRESHOLD,
+                TTL_EXTEND_TO,
+            );
         }
     }
 }
@@ -92,8 +117,8 @@ impl ApprovalControlContract {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{Env, Address, String};
     use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Address, Env, String};
 
     #[test]
     fn test_initialize_works() {
@@ -132,5 +157,83 @@ mod test {
         assert!(client.is_approved(&user));
         let result = client.execute_action(&user);
         assert_eq!(result, symbol_short!("exec"));
+    }
+}
+
+// Invariant tests — verify rules that must hold true under all conditions
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Address, Env, String};
+
+    // Invariant: once a user is approved they stay approved regardless of other operations
+    #[test]
+    fn invariant_approval_is_permanent() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Test Asset");
+        client.initialize(&admin, &asset_name);
+        client.approve_user(&admin, &user);
+
+        // approve many other users — original approval must still hold
+        for _ in 0..5 {
+            let other = Address::generate(&env);
+            client.approve_user(&admin, &other);
+        }
+        assert!(client.is_approved(&user));
+    }
+
+    // Invariant: non-admin can never approve anyone
+    #[test]
+    fn invariant_only_admin_can_approve() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Test Asset");
+        client.initialize(&admin, &asset_name);
+
+        let result = client.try_approve_user(&non_admin, &user);
+        assert!(result.is_err());
+        assert!(!client.is_approved(&user));
+    }
+}
+
+// Fuzz tests — property-based tests with randomised inputs
+#[cfg(test)]
+mod fuzz_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Address, Env, String};
+
+    proptest! {
+        // Fuzz: is_approved never panics regardless of how many users are approved
+        #[test]
+        fn fuzz_is_approved_never_panics(n_approvals in 0usize..20) {
+            let env = Env::default();
+            let contract_id = env.register(ApprovalControlContract, ());
+            let client = ApprovalControlContractClient::new(&env, &contract_id);
+            let admin = Address::generate(&env);
+            let asset_name = String::from_str(&env, "Fuzz Test Asset");
+            client.initialize(&admin, &asset_name);
+
+            // approve each user and immediately verify — avoids std::vec in no_std
+            for _ in 0..n_approvals {
+                let user = Address::generate(&env);
+                client.approve_user(&admin, &user);
+                prop_assert!(client.is_approved(&user));
+            }
+
+            // a fresh unapproved address must always return false
+            let unknown = Address::generate(&env);
+            prop_assert!(!client.is_approved(&unknown));
+        }
     }
 }

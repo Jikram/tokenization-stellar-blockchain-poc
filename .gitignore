@@ -3,6 +3,7 @@
 **/target
 **/*.rs.bk
 Cargo.lock
+**/test_snapshots
 
 # Node
 /node_modules
