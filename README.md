@@ -80,7 +80,8 @@ bash scripts/check-contract.sh
 | `initialize(admin, asset_name)` | Write | Deploy-time setup — sets admin wallet and asset name |
 | `approve_user(admin, user)` | Write | Admin whitelists an investor wallet on-chain |
 | `is_approved(user)` | Read | Returns whether a wallet is KYC approved |
-| `execute_action(user)` | Execute | Enforces KYC gate — reverts if wallet not approved |
+| `get_balance(user)` | Read | Returns the number of asset units held by a wallet |
+| `execute_action(user)` | Execute | Enforces KYC gate — increments and returns the caller's unit balance, reverts if not approved |
 
 ## Contract events and emitted data types
 
@@ -90,11 +91,11 @@ Each function emits an on-chain event. The table below shows every field and its
 |---|---|---|---|
 | `init` | `Symbol("init")` | admin address, asset name, deploy ledger | `Address`, `String`, `u32` |
 | `apprv` | `Symbol("apprv")` | admin address, user address, approved flag, ledger, timestamp | `Address`, `Address`, `bool`, `u32`, `u64` |
-| `prot_exec` | `Symbol("prot_exec")` | user address, NAV price (cents), timestamp | `Address`, `i128`, `u64` |
+| `prot_exec` | `Symbol("prot_exec")` | user address, new unit balance, NAV price (cents), timestamp | `Address`, `u32`, `i128`, `u64` |
 
 **Type coverage:** `Symbol`, `Address`, `String`, `bool`, `u32`, `u64`, `i128`
 
-The NAV price is represented as `i128` in cents (`10000` = $100.00). Timestamps are Unix seconds as `u64`. The ledger sequence is `u32`.
+The NAV price is represented as `i128` in cents (`10000` = $100.00). Timestamps are Unix seconds as `u64`. The ledger sequence is `u32`. The unit balance is a `u32` counter incremented on each `execute_action` call — multiply by 100 to get the dollar value of the wallet's holdings.
 
 > For Substreams teams: all values are XDR-encoded `ScVal`. Use `scValToNative` (JS SDK) or the Soroban XDR decoder for your language to deserialise. `u64` and `i128` deserialise as `BigInt` in JavaScript — handle accordingly.
 
