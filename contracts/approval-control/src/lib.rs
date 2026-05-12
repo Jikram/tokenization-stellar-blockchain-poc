@@ -1,8 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, Map, String, Symbol,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Map, String};
 
 const TTL_THRESHOLD: u32 = 100;
 const TTL_EXTEND_TO: u32 = 3_110_400; // ~6 months at 5s/ledger
@@ -14,6 +12,7 @@ pub struct ApprovalControlContract;
 enum DataKey {
     Admin,
     ApprovedUsers,
+    Balances,
 }
 
 #[contractimpl]
@@ -69,17 +68,35 @@ impl ApprovalControlContract {
         approved.and_then(|map| map.get(user)).unwrap_or(false)
     }
 
-    pub fn execute_action(env: Env, user: Address) -> Symbol {
+    pub fn get_balance(env: Env, user: Address) -> u32 {
+        Self::extend_ttl(&env);
+        let balances: Option<Map<Address, u32>> =
+            env.storage().persistent().get(&DataKey::Balances);
+        balances.and_then(|map| map.get(user)).unwrap_or(0)
+    }
+
+    pub fn execute_action(env: Env, user: Address) -> u32 {
         let approved = Self::is_approved(env.clone(), user.clone());
         if !approved {
             panic!("user is not approved to execute this action");
         }
-        // emits: Address (user), i128 (NAV price in cents, $100.00 = 10000), u64 (unix timestamp)
+        let mut balances: Map<Address, u32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Balances)
+            .unwrap_or_else(|| Map::new(&env));
+        let new_balance = balances.get(user.clone()).unwrap_or(0) + 1;
+        balances.set(user.clone(), new_balance);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balances, &balances);
+        Self::extend_ttl(&env);
+        // emits: Address (user), u32 (new balance), i128 (NAV price in cents), u64 (unix timestamp)
         env.events().publish(
             (symbol_short!("prot_exec"),),
-            (user, 10000i128, env.ledger().timestamp()),
+            (user, new_balance, 10000i128, env.ledger().timestamp()),
         );
-        symbol_short!("exec")
+        new_balance
     }
 }
 
@@ -110,6 +127,11 @@ impl ApprovalControlContract {
                 TTL_THRESHOLD,
                 TTL_EXTEND_TO,
             );
+        }
+        if env.storage().persistent().has(&DataKey::Balances) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::Balances, TTL_THRESHOLD, TTL_EXTEND_TO);
         }
     }
 }
@@ -155,8 +177,25 @@ mod test {
         client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user);
         assert!(client.is_approved(&user));
-        let result = client.execute_action(&user);
-        assert_eq!(result, symbol_short!("exec"));
+        let balance = client.execute_action(&user);
+        assert_eq!(balance, 1u32);
+    }
+
+    #[test]
+    fn test_balance_increments_on_each_execute() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
+        client.initialize(&admin, &asset_name);
+        client.approve_user(&admin, &user);
+        assert_eq!(client.get_balance(&user), 0u32);
+        assert_eq!(client.execute_action(&user), 1u32);
+        assert_eq!(client.execute_action(&user), 2u32);
+        assert_eq!(client.execute_action(&user), 3u32);
+        assert_eq!(client.get_balance(&user), 3u32);
     }
 }
 

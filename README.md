@@ -80,7 +80,8 @@ bash scripts/check-contract.sh
 | `initialize(admin, asset_name)` | Write | Deploy-time setup — sets admin wallet and asset name |
 | `approve_user(admin, user)` | Write | Admin whitelists an investor wallet on-chain |
 | `is_approved(user)` | Read | Returns whether a wallet is KYC approved |
-| `execute_action(user)` | Execute | Enforces KYC gate — reverts if wallet not approved |
+| `get_balance(user)` | Read | Returns the number of asset units held by a wallet |
+| `execute_action(user)` | Execute | Enforces KYC gate — increments and returns the caller's unit balance, reverts if not approved |
 
 ## Contract events and emitted data types
 
@@ -90,7 +91,7 @@ Each function emits an on-chain event. The table below shows every field and its
 |---|---|---|---|
 | `init` | `Symbol("init")` | admin address, asset name, deploy ledger | `Address`, `String`, `u32` |
 | `apprv` | `Symbol("apprv")` | admin address, user address, approved flag, ledger, timestamp | `Address`, `Address`, `bool`, `u32`, `u64` |
-| `prot_exec` | `Symbol("prot_exec")` | user address, NAV price (cents), timestamp | `Address`, `i128`, `u64` |
+| `prot_exec` | `Symbol("prot_exec")` | user address, new unit balance, NAV price (cents), timestamp | `Address`, `u32`, `i128`, `u64` |
 
 **Type coverage:** `Symbol`, `Address`, `String`, `bool`, `u32`, `u64`, `i128`
 
