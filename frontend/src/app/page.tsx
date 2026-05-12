@@ -156,7 +156,7 @@ export default function Home() {
       const txHash = result.sendTransactionResponse?.hash || result.getTransactionResponse?.hash;
       const newBalance = await getBalance(walletAddress);
       setUserBalance(newBalance);
-      setActionState(`Access granted — you now hold ${newBalance} unit${newBalance !== 1 ? 's' : ''} ($${(newBalance * 100).toLocaleString()}.00) of this asset.`);
+      setActionState(`Access granted — you now hold ${newBalance} unit${newBalance !== 1 ? 's' : ''} ($${(newBalance * 1000).toLocaleString()}.00) of this asset.`);
       setActionSuccess(true);
       pushActivity({ timestamp: new Date().toISOString(), type: 'asset_access', status: 'success', message: `Asset access granted. Holdings: ${newBalance} unit${newBalance !== 1 ? 's' : ''}`, txHash });
     } catch (error) {
@@ -345,10 +345,10 @@ export default function Home() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
               <p className="text-xs text-slate-400 uppercase tracking-widest">Your Holdings</p>
               <p className="mt-1 text-sm font-semibold text-white">
-                {userBalance === null ? (connected ? '...' : '—') : `$${(userBalance * 100).toLocaleString()}.00`}
+                {userBalance === null ? (connected ? '...' : '—') : `$${(userBalance * 1000).toLocaleString()}.00`}
               </p>
               {userBalance !== null && userBalance > 0 && (
-                <p className="mt-0.5 text-xs text-slate-500">{userBalance} unit{userBalance !== 1 ? 's' : ''} × $100.00</p>
+                <p className="mt-0.5 text-xs text-slate-500">{userBalance} unit{userBalance !== 1 ? 's' : ''} × $1,000.00</p>
               )}
             </div>
           </div>
@@ -522,7 +522,7 @@ export default function Home() {
               <p className="mt-1 text-sm text-slate-400">Tokenized Real Estate Fund · Series A</p>
               <div className="mt-6 rounded-2xl bg-slate-950/80 p-6 text-center">
                 <p className="text-xs uppercase tracking-widest text-slate-400">Net Asset Value / Unit</p>
-                <p className="mt-3 text-5xl font-semibold text-white">$100.00</p>
+                <p className="mt-3 text-5xl font-semibold text-white">$1,000.00</p>
                 <p className="mt-2 text-xs text-slate-500">Simulated price feed · Testnet only</p>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-3">
