@@ -95,7 +95,7 @@ Each function emits an on-chain event. The table below shows every field and its
 
 **Type coverage:** `Symbol`, `Address`, `String`, `bool`, `u32`, `u64`, `i128`
 
-The NAV price is represented as `i128` in cents (`10000` = $100.00). Timestamps are Unix seconds as `u64`. The ledger sequence is `u32`. The unit balance is a `u32` counter incremented on each `execute_action` call — multiply by 100 to get the dollar value of the wallet's holdings.
+The NAV price is represented as `i128` in cents (`100000` = $1,000.00). Timestamps are Unix seconds as `u64`. The ledger sequence is `u32`. The unit balance is a `u32` counter incremented on each `execute_action` call — multiply by 1000 to get the dollar value of the wallet's holdings.
 
 > For Substreams teams: all values are XDR-encoded `ScVal`. Use `scValToNative` (JS SDK) or the Soroban XDR decoder for your language to deserialise. `u64` and `i128` deserialise as `BigInt` in JavaScript — handle accordingly.
 

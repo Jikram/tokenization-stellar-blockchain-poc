@@ -94,7 +94,7 @@ impl ApprovalControlContract {
         // emits: Address (user), u32 (new balance), i128 (NAV price in cents), u64 (unix timestamp)
         env.events().publish(
             (symbol_short!("prot_exec"),),
-            (user, new_balance, 10000i128, env.ledger().timestamp()),
+            (user, new_balance, 100000i128, env.ledger().timestamp()),
         );
         new_balance
     }
