@@ -55,6 +55,14 @@ export async function approveUser(adminAddress: string, userAddress: string) {
   return await assembled.signAndSend({ signTransaction: freighterSigner });
 }
 
+export async function getBalance(userAddress: string): Promise<number> {
+  if (!userAddress) throw new Error('Missing wallet address.');
+  const client = await getClient();
+  const assembled = await client.get_balance({ user: userAddress });
+  const sim = await assembled.simulate();
+  return Number(sim.result ?? 0);
+}
+
 export async function executeProtectedAction(userAddress: string) {
   if (!userAddress) throw new Error('Missing wallet address.');
   const client = await getClient();

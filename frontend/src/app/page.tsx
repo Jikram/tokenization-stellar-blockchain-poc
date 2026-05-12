@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { checkApprovalStatus, approveUser, executeProtectedAction, fetchContractEvents } from '../lib/contract';
+import { checkApprovalStatus, approveUser, executeProtectedAction, fetchContractEvents, getBalance } from '../lib/contract';
 import { connectFreighter, getFreighterPublicKey, checkFreighterInstalled } from '../lib/freighter';
 import { StrKey } from '@stellar/stellar-sdk';
 
@@ -76,6 +76,7 @@ export default function Home() {
   const [fetchRange, setFetchRange] = useState<{ start: number; end: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [hasFreighter, setHasFreighter] = useState(false);
+  const [userBalance, setUserBalance] = useState<number | null>(null);
 
   useEffect(() => {
     const checkAndSetFreighter = async () => {
@@ -94,6 +95,11 @@ export default function Home() {
     const interval = setInterval(checkAndSetFreighter, 2000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!walletAddress) { setUserBalance(null); return; }
+    getBalance(walletAddress).then(setUserBalance).catch(() => setUserBalance(null));
+  }, [walletAddress]);
 
   const pushActivity = (entry: ActivityEntry) => {
     setActivity((current) => [entry, ...current].slice(0, 8));
@@ -148,9 +154,11 @@ export default function Home() {
       pushActivity({ timestamp: new Date().toISOString(), type: 'asset_access', status: 'pending', message: 'Requesting access to tokenized asset...' });
       const result = await executeProtectedAction(walletAddress);
       const txHash = result.sendTransactionResponse?.hash || result.getTransactionResponse?.hash;
-      setActionState('Access granted — transaction confirmed on Stellar Testnet.');
+      const newBalance = await getBalance(walletAddress);
+      setUserBalance(newBalance);
+      setActionState(`Access granted — you now hold ${newBalance} unit${newBalance !== 1 ? 's' : ''} ($${(newBalance * 100).toLocaleString()}.00) of this asset.`);
       setActionSuccess(true);
-      pushActivity({ timestamp: new Date().toISOString(), type: 'asset_access', status: 'success', message: 'Asset access granted by smart contract', txHash });
+      pushActivity({ timestamp: new Date().toISOString(), type: 'asset_access', status: 'success', message: `Asset access granted. Holdings: ${newBalance} unit${newBalance !== 1 ? 's' : ''}`, txHash });
     } catch (error) {
       const raw = error instanceof Error ? error.message : '';
       const isAccessDenied =
@@ -275,7 +283,7 @@ export default function Home() {
           </div>
 
           {/* Info strip */}
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-4">
             <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
               <p className="text-xs text-slate-400 uppercase tracking-widest">Connected Wallet</p>
               <div className="mt-1 flex items-center gap-2">
@@ -333,6 +341,15 @@ export default function Home() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
               <p className="text-xs text-slate-400 uppercase tracking-widest">Network</p>
               <p className="mt-1 text-sm font-semibold text-white capitalize">{NETWORK}</p>
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+              <p className="text-xs text-slate-400 uppercase tracking-widest">Your Holdings</p>
+              <p className="mt-1 text-sm font-semibold text-white">
+                {userBalance === null ? (connected ? '...' : '—') : `$${(userBalance * 100).toLocaleString()}.00`}
+              </p>
+              {userBalance !== null && userBalance > 0 && (
+                <p className="mt-0.5 text-xs text-slate-500">{userBalance} unit{userBalance !== 1 ? 's' : ''} × $100.00</p>
+              )}
             </div>
           </div>
         </header>

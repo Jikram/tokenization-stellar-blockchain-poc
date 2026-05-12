@@ -74,7 +74,7 @@ echo ""
 echo "[ 2/4 ] Building contract..."
 cd "$CONTRACT_DIR"
 stellar contract build
-WASM_PATH="$CONTRACT_DIR/target/wasm32v1-none/release/approval_control.wasm"
+WASM_PATH="$ROOT/target/wasm32v1-none/release/approval_control.wasm"
 echo "        ✓ Build complete"
 
 # Step 3 — deploy
