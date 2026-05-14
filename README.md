@@ -77,7 +77,9 @@ bash scripts/check-contract.sh
 
 | Function | Type | Description |
 |---|---|---|
-| `initialize(admin, asset_name)` | Write | Deploy-time setup — sets admin wallet and asset name |
+| `initialize(admin, asset_name)` | Write | Deploy-time setup — sets admin wallet, stores `AssetMetadata` on-chain, emits `init` event |
+| `get_admin()` | Read | Returns the admin wallet address stored on-chain — always available, no event window dependency |
+| `get_metadata()` | Read | Returns the full `AssetMetadata` struct stored on-chain — always available, no event window dependency |
 | `approve_user(admin, user)` | Write | Admin whitelists an investor wallet on-chain |
 | `is_approved(user)` | Read | Returns whether a wallet is KYC approved |
 | `get_balance(user)` | Read | Returns the number of asset units held by a wallet |
@@ -95,7 +97,9 @@ Each function emits an on-chain event. The table below shows every field and its
 
 **Total type coverage (14):** `Symbol`, `Address`, `String`, `bool`, `u32`, `u64`, `i128`, `u128`, `Bytes`, `Vec`, `Map`, `Option`, `struct` (nested), `enum`
 
-### AssetMetadata struct (emitted in `init` event)
+### AssetMetadata struct (stored on-chain + emitted in `init` event)
+
+`AssetMetadata` is written to `persistent()` contract storage during `initialize` and is queryable at any time via `get_metadata()` — it does not expire with the event window. The same struct is also emitted in the `init` event for indexers.
 
 | Field | Type | Example value |
 |---|---|---|
@@ -106,7 +110,7 @@ Each function emits an on-chain event. The table below shows every field and its
 | `tags` | `Vec<String>` | `["real-estate", "series-a", "kyc-gated", "testnet"]` |
 | `properties` | `Map<String, String>` | `{"risk_level": "medium", "liquidity": "low", ...}` |
 | `document_hash` | `Bytes` | `deadbeefcafebabe...` (mock prospectus hash) |
-| `geo` | `struct GeoLocation` | `{country: "US", region: "New York"}` |
+| `geo` | `struct GeoLocation` | `{country: "TX", region: "Dallas"}` |
 | `issued_at` | `u64` | Unix timestamp of deployment |
 | `optional_isin` | `Option<String>` | `"US0231351067"` |
 

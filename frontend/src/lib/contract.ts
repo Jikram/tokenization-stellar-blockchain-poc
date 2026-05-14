@@ -63,6 +63,22 @@ export async function getBalance(userAddress: string): Promise<number> {
   return Number(sim.result ?? 0);
 }
 
+export async function getAdmin(): Promise<string> {
+  if (!CONTRACT_ID) throw new Error('NEXT_PUBLIC_CONTRACT_ID is not configured.');
+  const client = await getClient();
+  const assembled = await client.get_admin();
+  const sim = await assembled.simulate();
+  return String(sim.result ?? '');
+}
+
+export async function getMetadata(): Promise<any> {
+  if (!CONTRACT_ID) throw new Error('NEXT_PUBLIC_CONTRACT_ID is not configured.');
+  const client = await getClient();
+  const assembled = await client.get_metadata();
+  const sim = await assembled.simulate();
+  return sim.result ?? null;
+}
+
 export async function executeProtectedAction(userAddress: string) {
   if (!userAddress) throw new Error('Missing wallet address.');
   const client = await getClient();
