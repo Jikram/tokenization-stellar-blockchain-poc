@@ -89,15 +89,40 @@ Each function emits an on-chain event. The table below shows every field and its
 
 | Event | Topic | Value fields | ScVal types |
 |---|---|---|---|
-| `init` | `Symbol("init")` | admin address, asset name, deploy ledger | `Address`, `String`, `u32` |
-| `apprv` | `Symbol("apprv")` | admin address, user address, approved flag, ledger, timestamp | `Address`, `Address`, `bool`, `u32`, `u64` |
+| `init` | `Symbol("init")` | admin address, asset name, deploy ledger, `AssetMetadata` struct | `Address`, `String`, `u32`, `struct`, `enum`, `Vec`, `Map`, `Bytes`, `u64`, `u128`, `Option` |
+| `apprv` | `Symbol("apprv")` | admin address, user address, approved flag, ledger, timestamp | `Address`, `bool`, `u32`, `u64` |
 | `prot_exec` | `Symbol("prot_exec")` | user address, new unit balance, NAV price (cents), timestamp | `Address`, `u32`, `i128`, `u64` |
 
-**Type coverage:** `Symbol`, `Address`, `String`, `bool`, `u32`, `u64`, `i128`
+**Total type coverage (14):** `Symbol`, `Address`, `String`, `bool`, `u32`, `u64`, `i128`, `u128`, `Bytes`, `Vec`, `Map`, `Option`, `struct` (nested), `enum`
 
-The NAV price is represented as `i128` in cents (`100000` = $1,000.00). Timestamps are Unix seconds as `u64`. The ledger sequence is `u32`. The unit balance is a `u32` counter incremented on each `execute_action` call — multiply by 1000 to get the dollar value of the wallet's holdings.
+### AssetMetadata struct (emitted in `init` event)
 
-> For Substreams teams: all values are XDR-encoded `ScVal`. Use `scValToNative` (JS SDK) or the Soroban XDR decoder for your language to deserialise. `u64` and `i128` deserialise as `BigInt` in JavaScript — handle accordingly.
+| Field | Type | Example value |
+|---|---|---|
+| `asset_type` | `String` | `"real-estate"` |
+| `total_supply` | `u128` | `1000000` |
+| `min_investment` | `u128` | `1000` |
+| `status` | `enum AssetStatus` | `Active` / `Suspended` / `Redeemed` |
+| `tags` | `Vec<String>` | `["real-estate", "series-a", "kyc-gated", "testnet"]` |
+| `properties` | `Map<String, String>` | `{"risk_level": "medium", "liquidity": "low", ...}` |
+| `document_hash` | `Bytes` | `deadbeefcafebabe...` (mock prospectus hash) |
+| `geo` | `struct GeoLocation` | `{country: "US", region: "New York"}` |
+| `issued_at` | `u64` | Unix timestamp of deployment |
+| `optional_isin` | `Option<String>` | `"US0231351067"` |
+
+The NAV price is `i128` in cents (`100000` = $1,000.00). The unit balance is `u32` — multiply by 1000 for dollar value. Timestamps are Unix seconds as `u64`.
+
+## Contract interface (ABI)
+
+The file `contract-interface.json` at the project root contains the full contract ABI generated from the WASM:
+
+```bash
+stellar contract info interface --wasm target/wasm32v1-none/release/approval_control.wasm --output json-formatted
+```
+
+This file describes all functions, parameter types, return types, and custom type definitions (`AssetMetadata`, `GeoLocation`, `AssetStatus`). Share it with Substreams or indexer teams to generate decoder bindings — equivalent to an EVM ABI JSON.
+
+> For Substreams teams: all values are XDR-encoded `ScVal`. Use `scValToNative` (JS SDK) or the Soroban XDR decoder for your language to deserialise. `u64`, `u128`, and `i128` deserialise as `BigInt` in JavaScript — handle accordingly.
 
 ## Notes
 
