@@ -42,6 +42,7 @@ enum DataKey {
     Admin,
     ApprovedUsers,
     Balances,
+    Metadata,
 }
 
 #[contractimpl]
@@ -101,6 +102,11 @@ impl ApprovalControlContract {
             total_supply: 1_000_000u128,
         };
 
+        env.storage()
+            .persistent()
+            .set(&DataKey::Metadata, &metadata);
+        Self::extend_ttl(&env);
+
         // emits: Address (admin), String (asset_name), u32 (ledger), AssetMetadata (struct)
         // ScVal types covered: Symbol, Address, String, u32, u128, bool (apprv), i128 (prot_exec),
         //   u64, enum (AssetStatus), Vec<String>, Map<String,String>, Bytes, struct (GeoLocation), Option<String>
@@ -108,6 +114,22 @@ impl ApprovalControlContract {
             (symbol_short!("init"),),
             (admin, asset_name, env.ledger().sequence(), metadata),
         );
+    }
+
+    pub fn get_admin(env: Env) -> Address {
+        Self::extend_ttl(&env);
+        env.storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("contract not initialized"))
+    }
+
+    pub fn get_metadata(env: Env) -> AssetMetadata {
+        Self::extend_ttl(&env);
+        env.storage()
+            .persistent()
+            .get(&DataKey::Metadata)
+            .unwrap_or_else(|| panic!("contract not initialized"))
     }
 
     pub fn approve_user(env: Env, admin: Address, user: Address) {
@@ -207,6 +229,11 @@ impl ApprovalControlContract {
                 .persistent()
                 .extend_ttl(&DataKey::Balances, TTL_THRESHOLD, TTL_EXTEND_TO);
         }
+        if env.storage().persistent().has(&DataKey::Metadata) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::Metadata, TTL_THRESHOLD, TTL_EXTEND_TO);
+        }
     }
 }
 
@@ -225,6 +252,33 @@ mod test {
         let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
         client.initialize(&admin, &asset_name);
         assert!(!client.is_approved(&admin));
+    }
+
+    #[test]
+    fn test_get_admin_returns_stored_admin() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
+        client.initialize(&admin, &asset_name);
+        assert_eq!(client.get_admin(), admin);
+    }
+
+    #[test]
+    fn test_get_metadata_returns_stored_values() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
+        client.initialize(&admin, &asset_name);
+        let meta = client.get_metadata();
+        assert_eq!(meta.asset_type, String::from_str(&env, "real-estate"));
+        assert_eq!(meta.total_supply, 1_000_000u128);
+        assert_eq!(meta.min_investment, 1_000u128);
+        assert_eq!(meta.geo.region, String::from_str(&env, "Dallas"));
+        assert_eq!(meta.geo.country, String::from_str(&env, "TX"));
     }
 
     #[test]

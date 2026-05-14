@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { checkApprovalStatus, approveUser, executeProtectedAction, fetchContractEvents, getBalance } from '../lib/contract';
+import { checkApprovalStatus, approveUser, executeProtectedAction, fetchContractEvents, getBalance, getMetadata, getAdmin } from '../lib/contract';
 import { connectFreighter, getFreighterPublicKey, checkFreighterInstalled } from '../lib/freighter';
 import { StrKey } from '@stellar/stellar-sdk';
 
@@ -97,6 +97,57 @@ function Divider() {
   return <div className="border-t border-slate-800 my-1" />;
 }
 
+function AssetMetadataCard({ meta }: { meta: any }) {
+  const extractStatus = (s: any): string | null => {
+    if (!s) return null;
+    if (typeof s === 'string') return s;
+    if (Array.isArray(s)) return String(s[0]);
+    // contract client returns {tag: "Active"} (XDR union shape)
+    if (s.tag) return String(s.tag);
+    const keys = Object.keys(s);
+    return keys.length > 0 ? keys[0] : null;
+  };
+  const getProperties = (props: any): Array<[string, string]> => {
+    if (!props) return [];
+    // contract client returns array of [key, value] pairs
+    if (Array.isArray(props))
+      return props.map((e: any) => Array.isArray(e) ? [String(e[0]), String(e[1])] : [String(e), '']);
+    // JS Map (fallback)
+    if (typeof props.entries === 'function')
+      return Array.from(props.entries()).map(([k, v]: any) => [String(k), String(v)]);
+    return Object.entries(props).map(([k, v]) => [k, String(v)]);
+  };
+  const formatBytes = (v: any): string => {
+    if (!v) return '—';
+    if (typeof v === 'string') return v;
+    if (v instanceof Uint8Array) return Array.from(v).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+    if (v && typeof v === 'object' && v.type === 'Buffer' && Array.isArray(v.data))
+      return (v.data as number[]).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+    return String(v);
+  };
+  const statusKey = extractStatus(meta?.status);
+  const properties = getProperties(meta?.properties);
+  return (
+    <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+      <p className="text-xs font-semibold uppercase tracking-widest text-cyan-400 mb-2">Asset Metadata</p>
+      <div className="space-y-1">
+        <Row label="Type" value={String(meta.asset_type ?? '—')} />
+        <Row label="Status" value={statusKey ?? '—'} highlight={statusKey === 'Active' ? 'green' : 'red'} />
+        <Row label="Total Supply" value={meta.total_supply ? Number(meta.total_supply).toLocaleString() + ' units' : '—'} />
+        <Row label="Min Investment" value={meta.min_investment ? '$' + Number(meta.min_investment).toLocaleString() + '.00' : '—'} />
+        <Row label="ISIN" value={String(meta.optional_isin ?? 'N/A')} />
+        <Row label="Tags" value={Array.isArray(meta.tags) ? meta.tags.join(' · ') : '—'} />
+        <Row label="Doc Hash" value={formatBytes(meta.document_hash)} mono truncate />
+        <Row label="Location" value={meta.geo ? `${meta.geo.region}, ${meta.geo.country}` : '—'} />
+        <Row label="Issued At" value={meta.issued_at ? new Date(Number(meta.issued_at) * 1000).toUTCString() : '—'} />
+        {properties.map(([k, v]) => (
+          <Row key={k} label={k.replace(/_/g, ' ')} value={v} indent />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Badge({ label, variant }: { label: string; variant: 'get' | 'set' | 'execute' }) {
   const styles = {
     get: 'bg-blue-500/15 text-blue-300 border border-blue-500/30',
@@ -125,6 +176,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [hasFreighter, setHasFreighter] = useState(false);
   const [userBalance, setUserBalance] = useState<number | null>(null);
+  const [assetMetadata, setAssetMetadata] = useState<any>(null);
 
   useEffect(() => {
     const checkAndSetFreighter = async () => {
@@ -148,6 +200,11 @@ export default function Home() {
     if (!walletAddress) { setUserBalance(null); return; }
     getBalance(walletAddress).then(setUserBalance).catch(() => setUserBalance(null));
   }, [walletAddress]);
+
+  useEffect(() => {
+    getMetadata().then(setAssetMetadata).catch(() => setAssetMetadata(null));
+    getAdmin().then(setAdminAddress).catch(() => {});
+  }, []);
 
   const pushActivity = (entry: ActivityEntry) => {
     setActivity((current) => [entry, ...current].slice(0, 8));
@@ -638,6 +695,11 @@ export default function Home() {
                   Fetch
                 </button>
               </div>
+              {assetMetadata && (
+                <div className="mt-5">
+                  <AssetMetadataCard meta={assetMetadata} />
+                </div>
+              )}
               {adminAddress && (
                 <div className="mt-5 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
                   <p className="text-xs font-semibold uppercase tracking-widest text-amber-400">Admin Wallet</p>
@@ -661,8 +723,10 @@ export default function Home() {
                     return (
                       <div key={index} className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
                         <p className="text-xs font-semibold uppercase tracking-widest text-cyan-400">{label}</p>
-                        {topicKey === 'init'
+                        {topicKey === 'init' && !assetMetadata
                           ? <InitEventContent value={event.value} />
+                          : topicKey === 'init'
+                          ? (() => { try { const p = JSON.parse(event.value); return <p className="mt-1 text-sm text-slate-300 truncate">{Array.isArray(p) ? `${p[1]} · Ledger ${p[2]}` : '—'}</p>; } catch { return <p className="mt-1 text-sm text-slate-300">—</p>; } })()
                           : <p className="mt-1 text-sm text-slate-300 truncate">{formatEventValue(event.value)}</p>
                         }
                         <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
