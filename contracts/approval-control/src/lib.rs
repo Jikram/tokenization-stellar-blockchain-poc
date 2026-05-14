@@ -1,6 +1,35 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Map, String};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Map, String, Vec,
+};
+
+#[contracttype]
+pub enum AssetStatus {
+    Active,
+    Suspended,
+    Redeemed,
+}
+
+#[contracttype]
+pub struct GeoLocation {
+    pub country: String,
+    pub region: String,
+}
+
+#[contracttype]
+pub struct AssetMetadata {
+    pub asset_type: String,
+    pub document_hash: Bytes,
+    pub geo: GeoLocation,
+    pub issued_at: u64,
+    pub min_investment: u128,
+    pub optional_isin: Option<String>,
+    pub properties: Map<String, String>,
+    pub status: AssetStatus,
+    pub tags: Vec<String>,
+    pub total_supply: u128,
+}
 
 const TTL_THRESHOLD: u32 = 100;
 const TTL_EXTEND_TO: u32 = 3_110_400; // ~6 months at 5s/ledger
@@ -29,10 +58,55 @@ impl ApprovalControlContract {
             .persistent()
             .set(&DataKey::ApprovedUsers, &Map::<Address, bool>::new(&env));
         Self::extend_ttl(&env);
-        // emits: Address (admin), String (asset name), u32 (deploy ledger)
+
+        let mut tags: Vec<String> = Vec::new(&env);
+        tags.push_back(String::from_str(&env, "real-estate"));
+        tags.push_back(String::from_str(&env, "series-a"));
+        tags.push_back(String::from_str(&env, "kyc-gated"));
+        tags.push_back(String::from_str(&env, "testnet"));
+
+        let mut properties: Map<String, String> = Map::new(&env);
+        properties.set(
+            String::from_str(&env, "risk_level"),
+            String::from_str(&env, "medium"),
+        );
+        properties.set(
+            String::from_str(&env, "liquidity"),
+            String::from_str(&env, "low"),
+        );
+        properties.set(
+            String::from_str(&env, "fund_manager"),
+            String::from_str(&env, "Jamshaid"),
+        );
+
+        let metadata = AssetMetadata {
+            asset_type: String::from_str(&env, "real-estate"),
+            document_hash: Bytes::from_slice(
+                &env,
+                &[
+                    0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x01, 0x23, 0x45, 0x67, 0x89,
+                    0xab, 0xcd, 0xef,
+                ],
+            ),
+            geo: GeoLocation {
+                country: String::from_str(&env, "TX"),
+                region: String::from_str(&env, "Dallas"),
+            },
+            issued_at: env.ledger().timestamp(),
+            min_investment: 1_000u128,
+            optional_isin: Some(String::from_str(&env, "US0231351067")),
+            properties,
+            status: AssetStatus::Active,
+            tags,
+            total_supply: 1_000_000u128,
+        };
+
+        // emits: Address (admin), String (asset_name), u32 (ledger), AssetMetadata (struct)
+        // ScVal types covered: Symbol, Address, String, u32, u128, bool (apprv), i128 (prot_exec),
+        //   u64, enum (AssetStatus), Vec<String>, Map<String,String>, Bytes, struct (GeoLocation), Option<String>
         env.events().publish(
             (symbol_short!("init"),),
-            (admin, asset_name, env.ledger().sequence()),
+            (admin, asset_name, env.ledger().sequence(), metadata),
         );
     }
 

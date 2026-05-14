@@ -88,9 +88,14 @@ export async function fetchContractEvents(limit: number = 20): Promise<{ events:
       try {
         const native = scValToNative(val);
         if (typeof native === 'object' && native !== null) {
-          return JSON.stringify(native, (_, v) =>
-            typeof v === 'bigint' ? v.toString() : v
-          );
+          return JSON.stringify(native, (_, v) => {
+            if (typeof v === 'bigint') return v.toString();
+            if (v instanceof Uint8Array)
+              return Array.from(v).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+            if (v && typeof v === 'object' && v.type === 'Buffer' && Array.isArray(v.data))
+              return (v.data as number[]).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+            return v;
+          });
         }
         return String(native);
       } catch {

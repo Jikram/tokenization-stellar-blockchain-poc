@@ -49,6 +49,54 @@ function formatEventValue(raw: string): string {
   }
 }
 
+function InitEventContent({ value }: { value: string }) {
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.length < 4) return <p className="mt-1 text-sm text-slate-300 break-all">{value}</p>;
+    const [admin, assetName, ledger, meta] = parsed;
+    const statusKey = meta?.status
+      ? (Array.isArray(meta.status) ? String(meta.status[0]) : Object.keys(meta.status)[0])
+      : null;
+    return (
+      <div className="mt-2 max-h-72 overflow-y-auto space-y-1 pr-1">
+        <Row label="Admin" value={typeof admin === 'string' ? admin : String(admin)} mono />
+        <Row label="Asset" value={String(assetName)} />
+        <Row label="Ledger" value={String(ledger)} />
+        {meta && (<>
+          <Divider />
+          <Row label="Type" value={String(meta.asset_type ?? '—')} />
+          <Row label="Status" value={statusKey ?? '—'} highlight={statusKey === 'Active' ? 'green' : 'red'} />
+          <Row label="Total Supply" value={meta.total_supply ? Number(meta.total_supply).toLocaleString() + ' units' : '—'} />
+          <Row label="Min Investment" value={meta.min_investment ? '$' + Number(meta.min_investment).toLocaleString() + '.00' : '—'} />
+          <Row label="ISIN" value={String(meta.optional_isin ?? 'N/A')} />
+          <Row label="Tags" value={Array.isArray(meta.tags) ? meta.tags.join(' · ') : '—'} />
+          <Row label="Doc Hash" value={String(meta.document_hash ?? '—')} mono truncate />
+          <Row label="Location" value={meta.geo ? `${meta.geo.region}, ${meta.geo.country}` : '—'} />
+          <Row label="Issued At" value={meta.issued_at ? new Date(Number(meta.issued_at) * 1000).toUTCString() : '—'} />
+          {meta.properties && Object.entries(meta.properties).map(([k, v]) => (
+            <Row key={k} label={k.replace(/_/g, ' ')} value={String(v)} indent />
+          ))}
+        </>)}
+      </div>
+    );
+  } catch {
+    return <p className="mt-1 text-sm text-slate-300 break-all">{value}</p>;
+  }
+}
+
+function Row({ label, value, mono, truncate, highlight, indent }: { label: string; value: string; mono?: boolean; truncate?: boolean; highlight?: 'green' | 'red'; indent?: boolean }) {
+  return (
+    <div className={`flex items-start justify-between gap-2 text-xs min-w-0 ${indent ? 'pl-3' : ''}`}>
+      <span className="shrink-0 text-slate-500 capitalize">{label}</span>
+      <span className={`text-right min-w-0 ${mono ? 'font-mono' : ''} ${truncate ? 'truncate' : 'break-all'} ${highlight === 'green' ? 'text-emerald-400' : highlight === 'red' ? 'text-red-400' : 'text-slate-300'}`}>{value}</span>
+    </div>
+  );
+}
+
+function Divider() {
+  return <div className="border-t border-slate-800 my-1" />;
+}
+
 function Badge({ label, variant }: { label: string; variant: 'get' | 'set' | 'execute' }) {
   const styles = {
     get: 'bg-blue-500/15 text-blue-300 border border-blue-500/30',
@@ -220,8 +268,8 @@ export default function Home() {
       if (initEvent) {
         try {
           const parsed = JSON.parse(initEvent.value);
-          // value shape: {"vec":[{"address":"G..."},{"string":"..."},{"u32":...}]}
-          const addr = parsed?.vec?.[0]?.address ?? (Array.isArray(parsed) ? parsed[0] : null);
+          // value shape: [admin: Address, asset_name: String, ledger: u32, metadata: AssetMetadata]
+          const addr = Array.isArray(parsed) ? parsed[0] : (parsed?.vec?.[0]?.address ?? null);
           setAdminAddress(addr ?? initEvent.value);
         } catch {
           setAdminAddress(initEvent.value);
@@ -513,7 +561,7 @@ export default function Home() {
           </div>
 
           {/* Right sidebar */}
-          <aside className="space-y-6">
+          <aside className="min-w-0 space-y-6">
 
             {/* Asset NAV Feed */}
             <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl">
@@ -613,7 +661,10 @@ export default function Home() {
                     return (
                       <div key={index} className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
                         <p className="text-xs font-semibold uppercase tracking-widest text-cyan-400">{label}</p>
-                        <p className="mt-1 text-sm text-slate-300 truncate">{formatEventValue(event.value)}</p>
+                        {topicKey === 'init'
+                          ? <InitEventContent value={event.value} />
+                          : <p className="mt-1 text-sm text-slate-300 truncate">{formatEventValue(event.value)}</p>
+                        }
                         <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
                           <span>Ledger {event.ledger}</span>
                           <span className={event.inSuccessfulContractCall ? 'text-emerald-400' : 'text-red-400'}>
