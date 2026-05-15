@@ -28,8 +28,8 @@ type ContractEvent = {
 
 const EVENT_LABELS: Record<string, string> = {
   init: 'Contract Initialized',
-  apprv: 'Investor Whitelisted',
-  prot_exec: 'Asset Accessed',
+  approved: 'Investor Whitelisted',
+  asset_accessed: 'Asset Accessed',
 };
 
 function shortenAddress(addr: string): string {
@@ -43,7 +43,10 @@ function formatEventValue(raw: string): string {
       return parsed.map((v) => (typeof v === 'string' ? shortenAddress(v) : String(v))).join(', ');
     }
     if (typeof parsed === 'string') return shortenAddress(parsed);
-    return JSON.stringify(parsed);
+    if (typeof parsed === 'object' && parsed !== null) {
+      return Object.values(parsed).map((v) => (typeof v === 'string' ? shortenAddress(v) : String(v))).join(', ');
+    }
+    return String(parsed);
   } catch {
     return typeof raw === 'string' ? shortenAddress(raw) : raw;
   }
@@ -52,8 +55,12 @@ function formatEventValue(raw: string): string {
 function InitEventContent({ value }: { value: string }) {
   try {
     const parsed = JSON.parse(value);
-    if (!Array.isArray(parsed) || parsed.length < 4) return <p className="mt-1 text-sm text-slate-300 break-all">{value}</p>;
-    const [admin, assetName, ledger, meta] = parsed;
+    // support both old tuple format [admin, assetName, ledger, meta] and new map format {admin, asset_name, ledger, metadata}
+    const admin = Array.isArray(parsed) ? parsed[0] : parsed?.admin;
+    const assetName = Array.isArray(parsed) ? parsed[1] : parsed?.asset_name;
+    const ledger = Array.isArray(parsed) ? parsed[2] : parsed?.ledger;
+    const meta = Array.isArray(parsed) ? parsed[3] : parsed?.metadata;
+    if (!admin || !meta) return <p className="mt-1 text-sm text-slate-300 break-all">{value}</p>;
     const statusKey = meta?.status
       ? (Array.isArray(meta.status) ? String(meta.status[0]) : Object.keys(meta.status)[0])
       : null;
@@ -326,7 +333,7 @@ export default function Home() {
         try {
           const parsed = JSON.parse(initEvent.value);
           // value shape: [admin: Address, asset_name: String, ledger: u32, metadata: AssetMetadata]
-          const addr = Array.isArray(parsed) ? parsed[0] : (parsed?.vec?.[0]?.address ?? null);
+          const addr = Array.isArray(parsed) ? parsed[0] : (parsed?.admin ?? parsed?.vec?.[0]?.address ?? null);
           setAdminAddress(addr ?? initEvent.value);
         } catch {
           setAdminAddress(initEvent.value);
@@ -726,7 +733,7 @@ export default function Home() {
                         {topicKey === 'init' && !assetMetadata
                           ? <InitEventContent value={event.value} />
                           : topicKey === 'init'
-                          ? (() => { try { const p = JSON.parse(event.value); return <p className="mt-1 text-sm text-slate-300 truncate">{Array.isArray(p) ? `${p[1]} · Ledger ${p[2]}` : '—'}</p>; } catch { return <p className="mt-1 text-sm text-slate-300">—</p>; } })()
+                          ? (() => { try { const p = JSON.parse(event.value); const name = Array.isArray(p) ? p[1] : p?.asset_name; const led = Array.isArray(p) ? p[2] : p?.ledger; return <p className="mt-1 text-sm text-slate-300 truncate">{name ? `${name} · Ledger ${led}` : '—'}</p>; } catch { return <p className="mt-1 text-sm text-slate-300">—</p>; } })()
                           : <p className="mt-1 text-sm text-slate-300 truncate">{formatEventValue(event.value)}</p>
                         }
                         <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
