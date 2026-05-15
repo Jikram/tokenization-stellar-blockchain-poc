@@ -118,7 +118,7 @@ The NAV price is `i128` in cents (`100000` = $1,000.00). The unit balance is `u3
 
 ## Contract interface (ABI)
 
-Use `contract-interface.json` at the project root as the ABI for this contract — equivalent to an EVM ABI JSON. Hand this file to your Substreams or indexer team to generate decoder bindings.
+Use `contract-interface.json` at the project root as the ABI for this contract — equivalent to an EVM ABI JSON. 
 
 To regenerate it after any contract change:
 
