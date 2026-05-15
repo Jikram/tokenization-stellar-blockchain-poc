@@ -49,10 +49,38 @@ pub struct Approved {
 }
 
 #[contractevent]
-pub struct AssetAccessed {
+pub struct Minted {
+    pub admin: Address,
     pub user: Address,
-    pub balance: u32,
+    pub amount: u32,
+    pub new_balance: u32,
+    pub circulating_supply: u32,
     pub nav_price: i128,
+    pub timestamp: u64,
+}
+
+#[contractevent]
+pub struct Burned {
+    pub admin: Address,
+    pub user: Address,
+    pub amount: u32,
+    pub new_balance: u32,
+    pub circulating_supply: u32,
+    pub nav_price: i128,
+    pub timestamp: u64,
+}
+
+#[contractevent]
+pub struct Clawback {
+    pub admin: Address,
+    pub user: Address,
+    pub amount: u32,
+    pub new_balance: u32,
+    pub circulating_supply: u32,
+    pub nav_price: i128,
+    pub reason: String,
+    pub severity: i32,
+    pub case_reference: i64,
     pub timestamp: u64,
 }
 
@@ -68,6 +96,7 @@ enum DataKey {
     ApprovedUsers,
     Balances,
     Metadata,
+    CirculatingSupply,
 }
 
 #[contractimpl]
@@ -83,6 +112,9 @@ impl ApprovalControlContract {
         env.storage()
             .persistent()
             .set(&DataKey::ApprovedUsers, &Map::<Address, bool>::new(&env));
+        env.storage()
+            .persistent()
+            .set(&DataKey::CirculatingSupply, &0u32);
         Self::extend_ttl(&env);
 
         let mut tags: Vec<String> = Vec::new(&env);
@@ -193,26 +225,144 @@ impl ApprovalControlContract {
         balances.and_then(|map| map.get(user)).unwrap_or(0)
     }
 
-    pub fn execute_action(env: Env, user: Address) -> u32 {
+    pub fn get_circulating_supply(env: Env) -> u32 {
+        Self::extend_ttl(&env);
+        env.storage()
+            .persistent()
+            .get(&DataKey::CirculatingSupply)
+            .unwrap_or(0)
+    }
+
+    pub fn mint(env: Env, admin: Address, user: Address, amount: u32) -> u32 {
+        Self::require_admin(&env, &admin);
         let approved = Self::is_approved(env.clone(), user.clone());
         if !approved {
-            panic!("user is not approved to execute this action");
+            panic!("user is not approved to receive tokens");
+        }
+        let circulating: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CirculatingSupply)
+            .unwrap_or(0);
+        let metadata: AssetMetadata = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Metadata)
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        if (circulating as u128) + (amount as u128) > metadata.total_supply {
+            panic!("mint exceeds total supply cap");
         }
         let mut balances: Map<Address, u32> = env
             .storage()
             .persistent()
             .get(&DataKey::Balances)
             .unwrap_or_else(|| Map::new(&env));
-        let new_balance = balances.get(user.clone()).unwrap_or(0) + 1;
+        let new_balance = balances.get(user.clone()).unwrap_or(0) + amount;
         balances.set(user.clone(), new_balance);
         env.storage()
             .persistent()
             .set(&DataKey::Balances, &balances);
+        let new_circulating = circulating + amount;
+        env.storage()
+            .persistent()
+            .set(&DataKey::CirculatingSupply, &new_circulating);
         Self::extend_ttl(&env);
-        AssetAccessed {
+        Minted {
+            admin,
             user,
-            balance: new_balance,
-            nav_price: 100000i128,
+            amount,
+            new_balance,
+            circulating_supply: new_circulating,
+            nav_price: 100_000i128,
+            timestamp: env.ledger().timestamp(),
+        }
+        .publish(&env);
+        new_balance
+    }
+
+    pub fn burn(env: Env, admin: Address, user: Address, amount: u32) -> u32 {
+        Self::require_admin(&env, &admin);
+        let mut balances: Map<Address, u32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Balances)
+            .unwrap_or_else(|| Map::new(&env));
+        let current = balances.get(user.clone()).unwrap_or(0);
+        if amount > current {
+            panic!("cannot burn more than current balance");
+        }
+        let new_balance = current - amount;
+        balances.set(user.clone(), new_balance);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balances, &balances);
+        let circulating: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CirculatingSupply)
+            .unwrap_or(0);
+        let new_circulating = circulating - amount;
+        env.storage()
+            .persistent()
+            .set(&DataKey::CirculatingSupply, &new_circulating);
+        Self::extend_ttl(&env);
+        Burned {
+            admin,
+            user,
+            amount,
+            new_balance,
+            circulating_supply: new_circulating,
+            nav_price: 100_000i128,
+            timestamp: env.ledger().timestamp(),
+        }
+        .publish(&env);
+        new_balance
+    }
+
+    pub fn clawback(
+        env: Env,
+        admin: Address,
+        user: Address,
+        amount: u32,
+        reason: String,
+        severity: i32,
+        case_reference: i64,
+    ) -> u32 {
+        Self::require_admin(&env, &admin);
+        let mut balances: Map<Address, u32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Balances)
+            .unwrap_or_else(|| Map::new(&env));
+        let current = balances.get(user.clone()).unwrap_or(0);
+        if amount > current {
+            panic!("cannot clawback more than current balance");
+        }
+        let new_balance = current - amount;
+        balances.set(user.clone(), new_balance);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balances, &balances);
+        let circulating: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CirculatingSupply)
+            .unwrap_or(0);
+        let new_circulating = circulating - amount;
+        env.storage()
+            .persistent()
+            .set(&DataKey::CirculatingSupply, &new_circulating);
+        Self::extend_ttl(&env);
+        Clawback {
+            admin,
+            user,
+            amount,
+            new_balance,
+            circulating_supply: new_circulating,
+            nav_price: 100_000i128,
+            reason,
+            severity,
+            case_reference,
             timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
@@ -258,6 +408,13 @@ impl ApprovalControlContract {
                 .persistent()
                 .extend_ttl(&DataKey::Metadata, TTL_THRESHOLD, TTL_EXTEND_TO);
         }
+        if env.storage().persistent().has(&DataKey::CirculatingSupply) {
+            env.storage().persistent().extend_ttl(
+                &DataKey::CirculatingSupply,
+                TTL_THRESHOLD,
+                TTL_EXTEND_TO,
+            );
+        }
     }
 }
 
@@ -276,6 +433,7 @@ mod test {
         let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
         client.initialize(&admin, &asset_name);
         assert!(!client.is_approved(&admin));
+        assert_eq!(client.get_circulating_supply(), 0u32);
     }
 
     #[test]
@@ -307,7 +465,7 @@ mod test {
 
     #[test]
     #[should_panic]
-    fn test_unapproved_user_cannot_execute() {
+    fn test_unapproved_user_cannot_mint() {
         let env = Env::default();
         let contract_id = env.register(ApprovalControlContract, ());
         let client = ApprovalControlContractClient::new(&env, &contract_id);
@@ -315,11 +473,11 @@ mod test {
         let user = Address::generate(&env);
         let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
         client.initialize(&admin, &asset_name);
-        client.execute_action(&user);
+        client.mint(&admin, &user, &100u32);
     }
 
     #[test]
-    fn test_admin_can_approve_user_and_user_can_execute() {
+    fn test_admin_can_approve_and_mint() {
         let env = Env::default();
         let contract_id = env.register(ApprovalControlContract, ());
         let client = ApprovalControlContractClient::new(&env, &contract_id);
@@ -329,12 +487,14 @@ mod test {
         client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user);
         assert!(client.is_approved(&user));
-        let balance = client.execute_action(&user);
-        assert_eq!(balance, 1u32);
+        let balance = client.mint(&admin, &user, &500u32);
+        assert_eq!(balance, 500u32);
+        assert_eq!(client.get_balance(&user), 500u32);
+        assert_eq!(client.get_circulating_supply(), 500u32);
     }
 
     #[test]
-    fn test_balance_increments_on_each_execute() {
+    fn test_burn_reduces_balance_and_circulating_supply() {
         let env = Env::default();
         let contract_id = env.register(ApprovalControlContract, ());
         let client = ApprovalControlContractClient::new(&env, &contract_id);
@@ -343,11 +503,105 @@ mod test {
         let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
         client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user);
-        assert_eq!(client.get_balance(&user), 0u32);
-        assert_eq!(client.execute_action(&user), 1u32);
-        assert_eq!(client.execute_action(&user), 2u32);
-        assert_eq!(client.execute_action(&user), 3u32);
-        assert_eq!(client.get_balance(&user), 3u32);
+        client.mint(&admin, &user, &500u32);
+        let new_balance = client.burn(&admin, &user, &200u32);
+        assert_eq!(new_balance, 300u32);
+        assert_eq!(client.get_balance(&user), 300u32);
+        assert_eq!(client.get_circulating_supply(), 300u32);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cannot_burn_more_than_balance() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
+        client.initialize(&admin, &asset_name);
+        client.approve_user(&admin, &user);
+        client.mint(&admin, &user, &100u32);
+        client.burn(&admin, &user, &200u32);
+    }
+
+    #[test]
+    fn test_clawback_works() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
+        client.initialize(&admin, &asset_name);
+        client.approve_user(&admin, &user);
+        client.mint(&admin, &user, &500u32);
+        let new_balance = client.clawback(
+            &admin,
+            &user,
+            &100u32,
+            &String::from_str(&env, "sanctions"),
+            &9i32,
+            &20260515001i64,
+        );
+        assert_eq!(new_balance, 400u32);
+        assert_eq!(client.get_balance(&user), 400u32);
+        assert_eq!(client.get_circulating_supply(), 400u32);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cannot_clawback_more_than_balance() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
+        client.initialize(&admin, &asset_name);
+        client.approve_user(&admin, &user);
+        client.mint(&admin, &user, &100u32);
+        client.clawback(
+            &admin,
+            &user,
+            &200u32,
+            &String::from_str(&env, "fraud"),
+            &5i32,
+            &20260515002i64,
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cannot_mint_beyond_total_supply() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
+        client.initialize(&admin, &asset_name);
+        client.approve_user(&admin, &user);
+        client.mint(&admin, &user, &1_000_001u32);
+    }
+
+    #[test]
+    fn test_circulating_supply_tracks_across_multiple_investors() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let user1 = Address::generate(&env);
+        let user2 = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
+        client.initialize(&admin, &asset_name);
+        client.approve_user(&admin, &user1);
+        client.approve_user(&admin, &user2);
+        client.mint(&admin, &user1, &300u32);
+        client.mint(&admin, &user2, &200u32);
+        assert_eq!(client.get_circulating_supply(), 500u32);
+        client.burn(&admin, &user1, &100u32);
+        assert_eq!(client.get_circulating_supply(), 400u32);
     }
 }
 
@@ -394,6 +648,45 @@ mod invariant_tests {
         assert!(result.is_err());
         assert!(!client.is_approved(&user));
     }
+
+    // Invariant: non-admin can never mint tokens
+    #[test]
+    fn invariant_only_admin_can_mint() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Test Asset");
+        client.initialize(&admin, &asset_name);
+        client.approve_user(&admin, &user);
+
+        let result = client.try_mint(&non_admin, &user, &100u32);
+        assert!(result.is_err());
+        assert_eq!(client.get_balance(&user), 0u32);
+        assert_eq!(client.get_circulating_supply(), 0u32);
+    }
+
+    // Invariant: circulating supply never exceeds total supply cap
+    #[test]
+    fn invariant_circulating_never_exceeds_total_supply() {
+        let env = Env::default();
+        let contract_id = env.register(ApprovalControlContract, ());
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let asset_name = String::from_str(&env, "Test Asset");
+        client.initialize(&admin, &asset_name);
+        client.approve_user(&admin, &user);
+
+        client.mint(&admin, &user, &999_999u32);
+        assert_eq!(client.get_circulating_supply(), 999_999u32);
+        client.mint(&admin, &user, &1u32);
+        assert_eq!(client.get_circulating_supply(), 1_000_000u32);
+        let result = client.try_mint(&admin, &user, &1u32);
+        assert!(result.is_err());
+    }
 }
 
 // Fuzz tests — property-based tests with randomised inputs
@@ -415,7 +708,7 @@ mod fuzz_tests {
             let asset_name = String::from_str(&env, "Fuzz Test Asset");
             client.initialize(&admin, &asset_name);
 
-            // approve each user and immediately verify — avoids std::vec in no_std
+            // approve each user and immediately verify
             for _ in 0..n_approvals {
                 let user = Address::generate(&env);
                 client.approve_user(&admin, &user);
@@ -425,6 +718,28 @@ mod fuzz_tests {
             // a fresh unapproved address must always return false
             let unknown = Address::generate(&env);
             prop_assert!(!client.is_approved(&unknown));
+        }
+
+        // Fuzz: circulating supply never exceeds total supply under random mint amounts
+        #[test]
+        fn fuzz_mint_never_exceeds_total_supply(amounts in proptest::collection::vec(1u32..100u32, 1..20)) {
+            let env = Env::default();
+            let contract_id = env.register(ApprovalControlContract, ());
+            let client = ApprovalControlContractClient::new(&env, &contract_id);
+            let admin = Address::generate(&env);
+            let user = Address::generate(&env);
+            let asset_name = String::from_str(&env, "Fuzz Test Asset");
+            client.initialize(&admin, &asset_name);
+            client.approve_user(&admin, &user);
+
+            let mut total_minted: u32 = 0;
+            for amount in &amounts {
+                if total_minted + amount <= 1_000_000u32 {
+                    client.mint(&admin, &user, amount);
+                    total_minted += amount;
+                    prop_assert!(client.get_circulating_supply() <= 1_000_000u32);
+                }
+            }
         }
     }
 }
