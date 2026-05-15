@@ -79,14 +79,52 @@ export async function getMetadata(): Promise<any> {
   return sim.result ?? null;
 }
 
-export async function executeProtectedAction(userAddress: string) {
-  if (!userAddress) throw new Error('Missing wallet address.');
+export async function mintTokens(adminAddress: string, userAddress: string, amount: number) {
+  if (!adminAddress) throw new Error('Missing admin wallet address.');
+  if (!userAddress) throw new Error('Missing investor wallet address.');
   const client = await getClient();
-  const assembled = await client.execute_action(
-    { user: userAddress },
-    { publicKey: userAddress }
+  const assembled = await client.mint(
+    { admin: adminAddress, user: userAddress, amount },
+    { publicKey: adminAddress }
   );
-  return await assembled.signAndSend({ signTransaction: freighterSigner, force: true });
+  return await assembled.signAndSend({ signTransaction: freighterSigner });
+}
+
+export async function burnTokens(adminAddress: string, userAddress: string, amount: number) {
+  if (!adminAddress) throw new Error('Missing admin wallet address.');
+  if (!userAddress) throw new Error('Missing investor wallet address.');
+  const client = await getClient();
+  const assembled = await client.burn(
+    { admin: adminAddress, user: userAddress, amount },
+    { publicKey: adminAddress }
+  );
+  return await assembled.signAndSend({ signTransaction: freighterSigner });
+}
+
+export async function clawbackTokens(
+  adminAddress: string,
+  userAddress: string,
+  amount: number,
+  reason: string,
+  severity: number,
+  caseReference: number
+) {
+  if (!adminAddress) throw new Error('Missing admin wallet address.');
+  if (!userAddress) throw new Error('Missing investor wallet address.');
+  const client = await getClient();
+  const assembled = await client.clawback(
+    { admin: adminAddress, user: userAddress, amount, reason, severity, case_reference: caseReference },
+    { publicKey: adminAddress }
+  );
+  return await assembled.signAndSend({ signTransaction: freighterSigner });
+}
+
+export async function getCirculatingSupply(): Promise<number> {
+  if (!CONTRACT_ID) throw new Error('NEXT_PUBLIC_CONTRACT_ID is not configured.');
+  const client = await getClient();
+  const assembled = await client.get_circulating_supply();
+  const sim = await assembled.simulate();
+  return Number(sim.result ?? 0);
 }
 
 export async function fetchContractEvents(limit: number = 20): Promise<{ events: any[]; startLedger: number; endLedger: number }> {

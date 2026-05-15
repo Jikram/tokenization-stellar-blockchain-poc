@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { checkApprovalStatus, approveUser, executeProtectedAction, fetchContractEvents, getBalance, getMetadata, getAdmin } from '../lib/contract';
+import { checkApprovalStatus, approveUser, mintTokens, burnTokens, clawbackTokens, fetchContractEvents, getBalance, getMetadata, getAdmin, getCirculatingSupply } from '../lib/contract';
 import { connectFreighter, getFreighterPublicKey, checkFreighterInstalled } from '../lib/freighter';
 import { StrKey } from '@stellar/stellar-sdk';
 
@@ -29,7 +29,9 @@ type ContractEvent = {
 const EVENT_LABELS: Record<string, string> = {
   init: 'Contract Initialized',
   approved: 'Investor Whitelisted',
-  asset_accessed: 'Asset Accessed',
+  minted: 'Tokens Minted',
+  burned: 'Tokens Burned',
+  clawback: 'Regulatory Clawback',
 };
 
 function shortenAddress(addr: string): string {
@@ -55,7 +57,6 @@ function formatEventValue(raw: string): string {
 function InitEventContent({ value }: { value: string }) {
   try {
     const parsed = JSON.parse(value);
-    // support both old tuple format [admin, assetName, ledger, meta] and new map format {admin, asset_name, ledger, metadata}
     const admin = Array.isArray(parsed) ? parsed[0] : parsed?.admin;
     const assetName = Array.isArray(parsed) ? parsed[1] : parsed?.asset_name;
     const ledger = Array.isArray(parsed) ? parsed[2] : parsed?.ledger;
@@ -104,22 +105,19 @@ function Divider() {
   return <div className="border-t border-slate-800 my-1" />;
 }
 
-function AssetMetadataCard({ meta }: { meta: any }) {
+function AssetMetadataCard({ meta, circulatingSupply }: { meta: any; circulatingSupply: number | null }) {
   const extractStatus = (s: any): string | null => {
     if (!s) return null;
     if (typeof s === 'string') return s;
     if (Array.isArray(s)) return String(s[0]);
-    // contract client returns {tag: "Active"} (XDR union shape)
     if (s.tag) return String(s.tag);
     const keys = Object.keys(s);
     return keys.length > 0 ? keys[0] : null;
   };
   const getProperties = (props: any): Array<[string, string]> => {
     if (!props) return [];
-    // contract client returns array of [key, value] pairs
     if (Array.isArray(props))
       return props.map((e: any) => Array.isArray(e) ? [String(e[0]), String(e[1])] : [String(e), '']);
-    // JS Map (fallback)
     if (typeof props.entries === 'function')
       return Array.from(props.entries()).map(([k, v]: any) => [String(k), String(v)]);
     return Object.entries(props).map(([k, v]) => [k, String(v)]);
@@ -134,13 +132,19 @@ function AssetMetadataCard({ meta }: { meta: any }) {
   };
   const statusKey = extractStatus(meta?.status);
   const properties = getProperties(meta?.properties);
+  const totalSupply = meta?.total_supply ? Number(meta.total_supply) : null;
   return (
     <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
       <p className="text-xs font-semibold uppercase tracking-widest text-cyan-400 mb-2">Asset Metadata</p>
       <div className="space-y-1">
         <Row label="Type" value={String(meta.asset_type ?? '—')} />
         <Row label="Status" value={statusKey ?? '—'} highlight={statusKey === 'Active' ? 'green' : 'red'} />
-        <Row label="Total Supply" value={meta.total_supply ? Number(meta.total_supply).toLocaleString() + ' units' : '—'} />
+        <Row label="Total Supply" value={totalSupply ? totalSupply.toLocaleString() + ' units' : '—'} />
+        <Row
+          label="Circulating"
+          value={circulatingSupply !== null ? circulatingSupply.toLocaleString() + ' units' : '…'}
+          highlight={totalSupply && circulatingSupply !== null && circulatingSupply >= totalSupply ? 'red' : 'green'}
+        />
         <Row label="Min Investment" value={meta.min_investment ? '$' + Number(meta.min_investment).toLocaleString() + '.00' : '—'} />
         <Row label="ISIN" value={String(meta.optional_isin ?? 'N/A')} />
         <Row label="Tags" value={Array.isArray(meta.tags) ? meta.tags.join(' · ') : '—'} />
@@ -173,9 +177,15 @@ export default function Home() {
   const [connected, setConnected] = useState(false);
   const [kycCheckTarget, setKycCheckTarget] = useState('');
   const [kycStatus, setKycStatus] = useState<string | null>(null);
-  const [actionState, setActionState] = useState<string | null>(null);
-  const [actionSuccess, setActionSuccess] = useState<boolean | null>(null);
   const [whitelistTarget, setWhitelistTarget] = useState('');
+  const [mintTarget, setMintTarget] = useState('');
+  const [mintAmount, setMintAmount] = useState('');
+  const [burnTarget, setBurnTarget] = useState('');
+  const [burnAmount, setBurnAmount] = useState('');
+  const [burnType, setBurnType] = useState<'burn' | 'clawback'>('burn');
+  const [clawbackReason, setClawbackReason] = useState('');
+  const [clawbackSeverity, setClawbackSeverity] = useState('');
+  const [clawbackCaseRef, setClawbackCaseRef] = useState('');
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [contractEvents, setContractEvents] = useState<ContractEvent[]>([]);
   const [adminAddress, setAdminAddress] = useState<string>('');
@@ -184,6 +194,9 @@ export default function Home() {
   const [hasFreighter, setHasFreighter] = useState(false);
   const [userBalance, setUserBalance] = useState<number | null>(null);
   const [assetMetadata, setAssetMetadata] = useState<any>(null);
+  const [circulatingSupply, setCirculatingSupply] = useState<number | null>(null);
+
+  const isAdmin = connected && walletAddress && adminAddress && walletAddress === adminAddress;
 
   useEffect(() => {
     const checkAndSetFreighter = async () => {
@@ -211,7 +224,13 @@ export default function Home() {
   useEffect(() => {
     getMetadata().then(setAssetMetadata).catch(() => setAssetMetadata(null));
     getAdmin().then(setAdminAddress).catch(() => {});
+    getCirculatingSupply().then(setCirculatingSupply).catch(() => setCirculatingSupply(null));
   }, []);
+
+  const refreshBalances = async () => {
+    if (walletAddress) getBalance(walletAddress).then(setUserBalance).catch(() => {});
+    getCirculatingSupply().then(setCirculatingSupply).catch(() => {});
+  };
 
   const pushActivity = (entry: ActivityEntry) => {
     setActivity((current) => [entry, ...current].slice(0, 8));
@@ -256,39 +275,6 @@ export default function Home() {
     }
   };
 
-  const handleExecuteAction = async () => {
-    setLoading(true);
-    setActionState(null);
-    setActionSuccess(null);
-    try {
-      if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID not configured.');
-      if (!walletAddress) throw new Error('Connect your wallet first.');
-      pushActivity({ timestamp: new Date().toISOString(), type: 'asset_access', status: 'pending', message: 'Requesting access to tokenized asset...' });
-      const result = await executeProtectedAction(walletAddress);
-      const txHash = result.sendTransactionResponse?.hash || result.getTransactionResponse?.hash;
-      const newBalance = await getBalance(walletAddress);
-      setUserBalance(newBalance);
-      setActionState(`Access granted — you now hold ${newBalance} unit${newBalance !== 1 ? 's' : ''} ($${(newBalance * 1000).toLocaleString()}.00) of this asset.`);
-      setActionSuccess(true);
-      pushActivity({ timestamp: new Date().toISOString(), type: 'asset_access', status: 'success', message: `Asset access granted. Holdings: ${newBalance} unit${newBalance !== 1 ? 's' : ''}`, txHash });
-    } catch (error) {
-      const raw = error instanceof Error ? error.message : '';
-      const isAccessDenied =
-        raw.includes('not approved') ||
-        raw.includes('UnreachableCodeReached') ||
-        raw.includes('WasmVm') ||
-        raw.includes('execute_action');
-      const message = isAccessDenied
-        ? 'Access denied — this wallet has not been KYC approved by the asset issuer.'
-        : raw || 'Access denied';
-      setActionState(message);
-      setActionSuccess(false);
-      pushActivity({ timestamp: new Date().toISOString(), type: 'asset_access', status: 'error', message });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleWhitelistUser = async () => {
     setLoading(true);
     try {
@@ -321,6 +307,90 @@ export default function Home() {
     }
   };
 
+  const handleMint = async () => {
+    const target = mintTarget.trim();
+    const amount = parseInt(mintAmount, 10);
+    if (!target || !amount || amount <= 0) return;
+    setLoading(true);
+    try {
+      if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID not configured.');
+      if (!walletAddress) throw new Error('Connect your wallet first.');
+      pushActivity({ timestamp: new Date().toISOString(), type: 'mint', status: 'pending', message: `Minting ${amount} tokens to ${target.slice(0, 8)}...` });
+      const result = await mintTokens(walletAddress, target, amount);
+      await refreshBalances();
+      pushActivity({
+        timestamp: new Date().toISOString(),
+        type: 'mint',
+        status: 'success',
+        message: `Minted ${amount} tokens to ${target.slice(0, 8)}...`,
+        txHash: result.result?.transactionHash,
+      });
+      setMintTarget('');
+      setMintAmount('');
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : '';
+      const message = raw.includes('not approved')
+        ? 'Investor must be KYC approved before minting tokens.'
+        : raw.includes('total supply') ? 'Mint exceeds total supply cap of 1,000,000 units.'
+        : raw || 'Mint failed';
+      pushActivity({ timestamp: new Date().toISOString(), type: 'mint', status: 'error', message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBurnOrClawback = async () => {
+    const target = burnTarget.trim();
+    const amount = parseInt(burnAmount, 10);
+    if (!target || !amount || amount <= 0) return;
+    setLoading(true);
+    try {
+      if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID not configured.');
+      if (!walletAddress) throw new Error('Connect your wallet first.');
+      if (burnType === 'clawback') {
+        if (!clawbackReason.trim()) throw new Error('Clawback reason is required.');
+        const severity = parseInt(clawbackSeverity, 10);
+        const caseRef = parseInt(clawbackCaseRef, 10);
+        if (!severity || severity < 1 || severity > 10) throw new Error('Severity must be 1–10.');
+        if (!caseRef) throw new Error('Case reference number is required.');
+        pushActivity({ timestamp: new Date().toISOString(), type: 'clawback', status: 'pending', message: `Clawback ${amount} tokens from ${target.slice(0, 8)}... (${clawbackReason})` });
+        const result = await clawbackTokens(walletAddress, target, amount, clawbackReason.trim(), severity, caseRef);
+        await refreshBalances();
+        pushActivity({
+          timestamp: new Date().toISOString(),
+          type: 'clawback',
+          status: 'success',
+          message: `Clawback complete — ${amount} tokens removed from ${target.slice(0, 8)}...`,
+          txHash: result.result?.transactionHash,
+        });
+      } else {
+        pushActivity({ timestamp: new Date().toISOString(), type: 'burn', status: 'pending', message: `Burning ${amount} tokens from ${target.slice(0, 8)}...` });
+        const result = await burnTokens(walletAddress, target, amount);
+        await refreshBalances();
+        pushActivity({
+          timestamp: new Date().toISOString(),
+          type: 'burn',
+          status: 'success',
+          message: `Burned ${amount} tokens from ${target.slice(0, 8)}...`,
+          txHash: result.result?.transactionHash,
+        });
+      }
+      setBurnTarget('');
+      setBurnAmount('');
+      setClawbackReason('');
+      setClawbackSeverity('');
+      setClawbackCaseRef('');
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : '';
+      const message = raw.includes('more than current balance')
+        ? 'Cannot burn/clawback more than the investor currently holds.'
+        : raw || 'Operation failed';
+      pushActivity({ timestamp: new Date().toISOString(), type: burnType, status: 'error', message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleFetchEvents = async () => {
     setLoading(true);
     try {
@@ -332,8 +402,7 @@ export default function Home() {
       if (initEvent) {
         try {
           const parsed = JSON.parse(initEvent.value);
-          // value shape: [admin: Address, asset_name: String, ledger: u32, metadata: AssetMetadata]
-          const addr = Array.isArray(parsed) ? parsed[0] : (parsed?.admin ?? parsed?.vec?.[0]?.address ?? null);
+          const addr = Array.isArray(parsed) ? parsed[0] : (parsed?.admin ?? null);
           setAdminAddress(addr ?? initEvent.value);
         } catch {
           setAdminAddress(initEvent.value);
@@ -359,7 +428,7 @@ export default function Home() {
               <p className="text-sm uppercase tracking-[0.3em] text-cyan-400">Stellar Soroban · Rust Smart Contract</p>
               <h1 className="mt-3 text-4xl font-semibold text-white">Tokenized Asset Access Control</h1>
               <p className="mt-3 max-w-2xl text-slate-400">
-                A regulated tokenized asset on Stellar Testnet. Investor wallets must be KYC-approved on-chain before they can access the asset — enforced by a Rust smart contract, not a database.
+                A regulated tokenized asset on Stellar Testnet. Investor wallets must be KYC-approved on-chain before receiving tokens — enforced by a Rust smart contract, not a database.
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:items-end">
@@ -381,10 +450,10 @@ export default function Home() {
           {/* Demo flow strip */}
           <div className="grid gap-3 sm:grid-cols-4">
             {[
-              { step: '1', label: 'Admin whitelists their own wallet', action: 'SET — issuer self-approves', color: 'amber' },
-              { step: '2', label: 'Admin whitelists an investor wallet', action: 'SET — writes to chain', color: 'amber' },
-              { step: '3', label: 'Anyone reads KYC status of a wallet', action: 'GET — reads from chain', color: 'blue' },
-              { step: '4', label: 'Approved wallet accesses the asset', action: 'EXECUTE — contract enforces rule', color: 'emerald' },
+              { step: '1', label: 'Admin whitelists investor wallet', action: 'SET — KYC approval on-chain', color: 'amber' },
+              { step: '2', label: 'Admin mints tokens to investor', action: 'SET — issues fund units', color: 'amber' },
+              { step: '3', label: 'Anyone reads KYC status or balance', action: 'GET — reads from chain', color: 'blue' },
+              { step: '4', label: 'Admin burns or clawbacks tokens', action: 'SET — regulatory control', color: 'amber' },
             ].map(({ step, label, action, color }) => (
               <div key={step} className={`rounded-2xl border border-slate-800 bg-slate-950/60 p-4`}>
                 <p className={`text-xs font-bold uppercase tracking-widest text-${color}-400`}>Step {step}</p>
@@ -544,17 +613,16 @@ export default function Home() {
                     <h2 className="text-xl font-semibold text-white">Whitelist Investor</h2>
                   </div>
                   <p className="mt-2 text-sm text-slate-400">
-                    As the asset issuer (admin), KYC-approve an investor wallet. This writes a permanent record to the Stellar blockchain — the wallet can now access the tokenized asset.
+                    As the asset issuer (admin), KYC-approve an investor wallet. This writes a permanent record to the Stellar blockchain — the wallet can now receive tokens.
                   </p>
                 </div>
               </div>
 
-              {/* Admin self-whitelist tip */}
               {connected && (
                 <div className="mt-5 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
                   <p className="text-xs font-semibold text-amber-400 uppercase tracking-widest">Demo tip — Step 1</p>
                   <p className="mt-1 text-sm text-slate-300">
-                    The admin wallet is not whitelisted by default. Whitelist yourself first so you can also demo the Execute step.
+                    Whitelist the investor wallet first — tokens can only be minted to KYC-approved wallets.
                   </p>
                   <button
                     onClick={() => setWhitelistTarget(walletAddress)}
@@ -581,43 +649,146 @@ export default function Home() {
                 </button>
               </div>
               <p className="mt-2 text-xs text-slate-500">
-                Requires admin wallet. Freighter will prompt you to sign the transaction before it is submitted to Stellar.
+                Requires admin wallet. Freighter will prompt you to sign the transaction.
               </p>
             </article>
 
-            {/* EXECUTE — Access Tokenized Asset */}
+            {/* SET — Mint Tokens */}
             <article className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <Badge label="EXECUTE" variant="execute" />
-                    <h2 className="text-xl font-semibold text-white">Access Tokenized Asset</h2>
-                  </div>
-                  <p className="mt-2 text-sm text-slate-400">
-                    Simulate an investor interacting with the tokenized asset. The smart contract checks on-chain KYC status and either grants or denies access — no off-chain database involved.
-                  </p>
+              <div className="flex items-center gap-2 mb-2">
+                <Badge label="SET" variant="set" />
+                <h2 className="text-xl font-semibold text-white">Mint Tokens</h2>
+              </div>
+              <p className="mt-1 text-sm text-slate-400">
+                Issue fund units to a KYC-approved investor. Admin only. Cannot exceed the total supply cap of 1,000,000 units.
+              </p>
+              {!isAdmin && connected && (
+                <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-950/60 p-3">
+                  <p className="text-xs text-slate-500">Switch to the admin wallet in Freighter to mint tokens.</p>
                 </div>
+              )}
+              <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+                <input
+                  value={mintTarget}
+                  onChange={(e) => setMintTarget(e.target.value)}
+                  placeholder="Investor wallet address…"
+                  disabled={!isAdmin}
+                  className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-amber-400 placeholder:text-slate-600 disabled:opacity-40"
+                />
+                <input
+                  value={mintAmount}
+                  onChange={(e) => setMintAmount(e.target.value)}
+                  placeholder="Amount"
+                  type="number"
+                  min="1"
+                  disabled={!isAdmin}
+                  className="w-28 rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-amber-400 placeholder:text-slate-600 disabled:opacity-40"
+                />
                 <button
-                  onClick={handleExecuteAction}
-                  disabled={loading || !connected}
-                  className="shrink-0 rounded-2xl bg-emerald-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={handleMint}
+                  disabled={loading || !isAdmin || !mintTarget.trim() || !mintAmount}
+                  className="rounded-2xl bg-amber-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Execute
+                  Mint
+                </button>
+              </div>
+              {connected && mintTarget && (
+                <button
+                  onClick={() => setMintTarget(walletAddress)}
+                  className="mt-2 text-xs text-slate-500 hover:text-slate-300 transition"
+                >
+                  Use my address
+                </button>
+              )}
+            </article>
+
+            {/* SET — Burn / Clawback */}
+            <article className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl">
+              <div className="flex items-center gap-2 mb-2">
+                <Badge label="SET" variant="set" />
+                <h2 className="text-xl font-semibold text-white">Burn / Clawback</h2>
+              </div>
+              <p className="mt-1 text-sm text-slate-400">
+                Burn redeems tokens cooperatively. Clawback is a forced regulatory action — requires a reason, severity level, and case reference number.
+              </p>
+              {!isAdmin && connected && (
+                <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-950/60 p-3">
+                  <p className="text-xs text-slate-500">Switch to the admin wallet in Freighter to burn or clawback tokens.</p>
+                </div>
+              )}
+
+              {/* Type toggle */}
+              <div className="mt-5 flex gap-2">
+                <button
+                  onClick={() => setBurnType('burn')}
+                  className={`rounded-full px-4 py-1.5 text-xs font-semibold transition ${burnType === 'burn' ? 'bg-amber-500 text-slate-950' : 'border border-slate-700 text-slate-400 hover:text-slate-200'}`}
+                >
+                  Normal Burn
+                </button>
+                <button
+                  onClick={() => setBurnType('clawback')}
+                  className={`rounded-full px-4 py-1.5 text-xs font-semibold transition ${burnType === 'clawback' ? 'bg-red-500 text-white' : 'border border-slate-700 text-slate-400 hover:text-slate-200'}`}
+                >
+                  Regulatory Clawback
                 </button>
               </div>
 
-              {actionState && (
-                <div className={`mt-6 rounded-2xl p-4 flex items-start gap-3 ${
-                  actionSuccess ? 'bg-emerald-500/10 border border-emerald-500/30' : 'bg-red-500/10 border border-red-500/30'
-                }`}>
-                  <span className="text-2xl mt-0.5">{actionSuccess ? '✓' : '✗'}</span>
-                  <div>
-                    <p className={`text-sm font-semibold ${actionSuccess ? 'text-emerald-300' : 'text-red-300'}`}>
-                      {actionState}
-                    </p>
-                    {actionSuccess && (
-                      <p className="mt-0.5 text-xs text-slate-500">Access enforced by the Rust contract — not middleware or a backend API.</p>
-                    )}
+              <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+                <input
+                  value={burnTarget}
+                  onChange={(e) => setBurnTarget(e.target.value)}
+                  placeholder="Investor wallet address…"
+                  disabled={!isAdmin}
+                  className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-amber-400 placeholder:text-slate-600 disabled:opacity-40"
+                />
+                <input
+                  value={burnAmount}
+                  onChange={(e) => setBurnAmount(e.target.value)}
+                  placeholder="Amount"
+                  type="number"
+                  min="1"
+                  disabled={!isAdmin}
+                  className="w-28 rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-amber-400 placeholder:text-slate-600 disabled:opacity-40"
+                />
+                <button
+                  onClick={handleBurnOrClawback}
+                  disabled={loading || !isAdmin || !burnTarget.trim() || !burnAmount}
+                  className={`rounded-2xl px-6 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${burnType === 'clawback' ? 'bg-red-500 text-white hover:bg-red-400' : 'bg-amber-500 text-slate-950 hover:bg-amber-400'}`}
+                >
+                  {burnType === 'clawback' ? 'Clawback' : 'Burn'}
+                </button>
+              </div>
+
+              {/* Clawback extra fields */}
+              {burnType === 'clawback' && (
+                <div className="mt-4 space-y-3 rounded-2xl border border-red-500/20 bg-red-500/5 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-red-400">Regulatory Details</p>
+                  <input
+                    value={clawbackReason}
+                    onChange={(e) => setClawbackReason(e.target.value)}
+                    placeholder="Reason (e.g. sanctions, fraud, court_order)"
+                    disabled={!isAdmin}
+                    className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-red-400 placeholder:text-slate-600 disabled:opacity-40"
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <input
+                      value={clawbackSeverity}
+                      onChange={(e) => setClawbackSeverity(e.target.value)}
+                      placeholder="Severity (1–10)"
+                      type="number"
+                      min="1"
+                      max="10"
+                      disabled={!isAdmin}
+                      className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-red-400 placeholder:text-slate-600 disabled:opacity-40"
+                    />
+                    <input
+                      value={clawbackCaseRef}
+                      onChange={(e) => setClawbackCaseRef(e.target.value)}
+                      placeholder="Case reference #"
+                      type="number"
+                      disabled={!isAdmin}
+                      className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-red-400 placeholder:text-slate-600 disabled:opacity-40"
+                    />
                   </div>
                 </div>
               )}
@@ -704,7 +875,7 @@ export default function Home() {
               </div>
               {assetMetadata && (
                 <div className="mt-5">
-                  <AssetMetadataCard meta={assetMetadata} />
+                  <AssetMetadataCard meta={assetMetadata} circulatingSupply={circulatingSupply} />
                 </div>
               )}
               {adminAddress && (
