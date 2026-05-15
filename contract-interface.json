@@ -1,3 +1,4 @@
+ℹ️  Loading contract spec from file...
 [
   {
     "event_v0": {
@@ -44,6 +45,116 @@
     "event_v0": {
       "doc": "",
       "lib": "",
+      "name": "Burned",
+      "prefix_topics": [
+        "burned"
+      ],
+      "params": [
+        {
+          "doc": "",
+          "name": "admin",
+          "type_": "address",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "user",
+          "type_": "address",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "amount",
+          "type_": "u32",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "new_balance",
+          "type_": "u32",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "circulating_supply",
+          "type_": "u32",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "nav_price",
+          "type_": "i128",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "timestamp",
+          "type_": "u64",
+          "location": "data"
+        }
+      ],
+      "data_format": "map"
+    }
+  },
+  {
+    "event_v0": {
+      "doc": "",
+      "lib": "",
+      "name": "Minted",
+      "prefix_topics": [
+        "minted"
+      ],
+      "params": [
+        {
+          "doc": "",
+          "name": "admin",
+          "type_": "address",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "user",
+          "type_": "address",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "amount",
+          "type_": "u32",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "new_balance",
+          "type_": "u32",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "circulating_supply",
+          "type_": "u32",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "nav_price",
+          "type_": "i128",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "timestamp",
+          "type_": "u64",
+          "location": "data"
+        }
+      ],
+      "data_format": "map"
+    }
+  },
+  {
+    "event_v0": {
+      "doc": "",
+      "lib": "",
       "name": "Approved",
       "prefix_topics": [
         "approved"
@@ -71,6 +182,79 @@
           "doc": "",
           "name": "ledger",
           "type_": "u32",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "timestamp",
+          "type_": "u64",
+          "location": "data"
+        }
+      ],
+      "data_format": "map"
+    }
+  },
+  {
+    "event_v0": {
+      "doc": "",
+      "lib": "",
+      "name": "Clawback",
+      "prefix_topics": [
+        "clawback"
+      ],
+      "params": [
+        {
+          "doc": "",
+          "name": "admin",
+          "type_": "address",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "user",
+          "type_": "address",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "amount",
+          "type_": "u32",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "new_balance",
+          "type_": "u32",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "circulating_supply",
+          "type_": "u32",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "nav_price",
+          "type_": "i128",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "reason",
+          "type_": "string",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "severity",
+          "type_": "i32",
+          "location": "data"
+        },
+        {
+          "doc": "",
+          "name": "case_reference",
+          "type_": "i64",
           "location": "data"
         },
         {
@@ -210,40 +394,96 @@
     }
   },
   {
-    "event_v0": {
+    "function_v0": {
       "doc": "",
-      "lib": "",
-      "name": "AssetAccessed",
-      "prefix_topics": [
-        "asset_accessed"
-      ],
-      "params": [
+      "name": "burn",
+      "inputs": [
+        {
+          "doc": "",
+          "name": "admin",
+          "type_": "address"
+        },
         {
           "doc": "",
           "name": "user",
-          "type_": "address",
-          "location": "data"
+          "type_": "address"
         },
         {
           "doc": "",
-          "name": "balance",
-          "type_": "u32",
-          "location": "data"
-        },
-        {
-          "doc": "",
-          "name": "nav_price",
-          "type_": "i128",
-          "location": "data"
-        },
-        {
-          "doc": "",
-          "name": "timestamp",
-          "type_": "u64",
-          "location": "data"
+          "name": "amount",
+          "type_": "u32"
         }
       ],
-      "data_format": "map"
+      "outputs": [
+        "u32"
+      ]
+    }
+  },
+  {
+    "function_v0": {
+      "doc": "",
+      "name": "mint",
+      "inputs": [
+        {
+          "doc": "",
+          "name": "admin",
+          "type_": "address"
+        },
+        {
+          "doc": "",
+          "name": "user",
+          "type_": "address"
+        },
+        {
+          "doc": "",
+          "name": "amount",
+          "type_": "u32"
+        }
+      ],
+      "outputs": [
+        "u32"
+      ]
+    }
+  },
+  {
+    "function_v0": {
+      "doc": "",
+      "name": "clawback",
+      "inputs": [
+        {
+          "doc": "",
+          "name": "admin",
+          "type_": "address"
+        },
+        {
+          "doc": "",
+          "name": "user",
+          "type_": "address"
+        },
+        {
+          "doc": "",
+          "name": "amount",
+          "type_": "u32"
+        },
+        {
+          "doc": "",
+          "name": "reason",
+          "type_": "string"
+        },
+        {
+          "doc": "",
+          "name": "severity",
+          "type_": "i32"
+        },
+        {
+          "doc": "",
+          "name": "case_reference",
+          "type_": "i64"
+        }
+      ],
+      "outputs": [
+        "u32"
+      ]
     }
   },
   {
@@ -343,14 +583,8 @@
   {
     "function_v0": {
       "doc": "",
-      "name": "execute_action",
-      "inputs": [
-        {
-          "doc": "",
-          "name": "user",
-          "type_": "address"
-        }
-      ],
+      "name": "get_circulating_supply",
+      "inputs": [],
       "outputs": [
         "u32"
       ]
