@@ -118,15 +118,19 @@ The NAV price is `i128` in cents (`100000` = $1,000.00). The unit balance is `u3
 
 ## Contract interface (ABI)
 
-The file `contract-interface.json` at the project root contains the full contract ABI generated from the WASM:
+Use `contract-interface.json` at the project root as the ABI for this contract — equivalent to an EVM ABI JSON. Hand this file to your Substreams or indexer team to generate decoder bindings.
+
+To regenerate it after any contract change:
 
 ```bash
-stellar contract info interface --wasm target/wasm32v1-none/release/approval_control.wasm --output json-formatted
+stellar contract info interface --wasm target/wasm32v1-none/release/approval_control.wasm --output json-formatted > contract-interface.json
 ```
 
-This file describes all functions, parameter types, return types, and custom type definitions (`AssetMetadata`, `GeoLocation`, `AssetStatus`). Share it with Substreams or indexer teams to generate decoder bindings — equivalent to an EVM ABI JSON.
-
-> For Substreams teams: all values are XDR-encoded `ScVal`. Use `scValToNative` (JS SDK) or the Soroban XDR decoder for your language to deserialise. `u64`, `u128`, and `i128` deserialise as `BigInt` in JavaScript — handle accordingly.
+**Notes for integrators:**
+- All on-chain values are XDR-encoded `ScVal`
+- Use `scValToNative` (JS SDK) or the Soroban XDR decoder for your language to deserialise
+- `u64`, `u128`, and `i128` deserialise as `BigInt` in JavaScript — handle accordingly
+- Custom types (`AssetMetadata`, `GeoLocation`, `AssetStatus`) are defined in this file — use them to generate typed bindings
 
 ## Notes
 
