@@ -91,9 +91,9 @@ Each function emits an on-chain event. The table below shows every field and its
 
 | Event | Topic | Value fields | ScVal types |
 |---|---|---|---|
-| `init` | `Symbol("init")` | admin address, asset name, deploy ledger, `AssetMetadata` struct | `Address`, `String`, `u32`, `struct`, `enum`, `Vec`, `Map`, `Bytes`, `u64`, `u128`, `Option` |
-| `apprv` | `Symbol("apprv")` | admin address, user address, approved flag, ledger, timestamp | `Address`, `bool`, `u32`, `u64` |
-| `prot_exec` | `Symbol("prot_exec")` | user address, new unit balance, NAV price (cents), timestamp | `Address`, `u32`, `i128`, `u64` |
+| `Init` | `Symbol("init")` | admin address, asset name, deploy ledger, `AssetMetadata` struct | `Address`, `String`, `u32`, `struct`, `enum`, `Vec`, `Map`, `Bytes`, `u64`, `u128`, `Option` |
+| `Approved` | `Symbol("approved")` | admin address, user address, approved flag, ledger, timestamp | `Address`, `bool`, `u32`, `u64` |
+| `AssetAccessed` | `Symbol("asset_accessed")` | user address, unit balance, NAV price (cents), timestamp | `Address`, `u32`, `i128`, `u64` |
 
 **Total type coverage (14):** `Symbol`, `Address`, `String`, `bool`, `u32`, `u64`, `i128`, `u128`, `Bytes`, `Vec`, `Map`, `Option`, `struct` (nested), `enum`
 

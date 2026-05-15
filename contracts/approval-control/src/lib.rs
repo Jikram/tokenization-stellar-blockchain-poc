@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Map, String, Vec,
+    contract, contractevent, contractimpl, contracttype, Address, Bytes, Env, Map, String, Vec,
 };
 
 #[contracttype]
@@ -29,6 +29,31 @@ pub struct AssetMetadata {
     pub status: AssetStatus,
     pub tags: Vec<String>,
     pub total_supply: u128,
+}
+
+#[contractevent]
+pub struct Init {
+    pub admin: Address,
+    pub asset_name: String,
+    pub ledger: u32,
+    pub metadata: AssetMetadata,
+}
+
+#[contractevent]
+pub struct Approved {
+    pub admin: Address,
+    pub user: Address,
+    pub approved: bool,
+    pub ledger: u32,
+    pub timestamp: u64,
+}
+
+#[contractevent]
+pub struct AssetAccessed {
+    pub user: Address,
+    pub balance: u32,
+    pub nav_price: i128,
+    pub timestamp: u64,
 }
 
 const TTL_THRESHOLD: u32 = 100;
@@ -107,13 +132,13 @@ impl ApprovalControlContract {
             .set(&DataKey::Metadata, &metadata);
         Self::extend_ttl(&env);
 
-        // emits: Address (admin), String (asset_name), u32 (ledger), AssetMetadata (struct)
-        // ScVal types covered: Symbol, Address, String, u32, u128, bool (apprv), i128 (prot_exec),
-        //   u64, enum (AssetStatus), Vec<String>, Map<String,String>, Bytes, struct (GeoLocation), Option<String>
-        env.events().publish(
-            (symbol_short!("init"),),
-            (admin, asset_name, env.ledger().sequence(), metadata),
-        );
+        Init {
+            admin,
+            asset_name,
+            ledger: env.ledger().sequence(),
+            metadata,
+        }
+        .publish(&env);
     }
 
     pub fn get_admin(env: Env) -> Address {
@@ -144,17 +169,14 @@ impl ApprovalControlContract {
             .persistent()
             .set(&DataKey::ApprovedUsers, &approved);
         Self::extend_ttl(&env);
-        // emits: Address (admin), Address (user), bool (approved), u32 (ledger), u64 (unix timestamp)
-        env.events().publish(
-            (symbol_short!("apprv"),),
-            (
-                admin,
-                user,
-                true,
-                env.ledger().sequence(),
-                env.ledger().timestamp(),
-            ),
-        );
+        Approved {
+            admin,
+            user,
+            approved: true,
+            ledger: env.ledger().sequence(),
+            timestamp: env.ledger().timestamp(),
+        }
+        .publish(&env);
     }
 
     pub fn is_approved(env: Env, user: Address) -> bool {
@@ -187,11 +209,13 @@ impl ApprovalControlContract {
             .persistent()
             .set(&DataKey::Balances, &balances);
         Self::extend_ttl(&env);
-        // emits: Address (user), u32 (new balance), i128 (NAV price in cents), u64 (unix timestamp)
-        env.events().publish(
-            (symbol_short!("prot_exec"),),
-            (user, new_balance, 100000i128, env.ledger().timestamp()),
-        );
+        AssetAccessed {
+            user,
+            balance: new_balance,
+            nav_price: 100000i128,
+            timestamp: env.ledger().timestamp(),
+        }
+        .publish(&env);
         new_balance
     }
 }
