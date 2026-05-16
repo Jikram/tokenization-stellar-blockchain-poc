@@ -531,15 +531,15 @@ export default function Home() {
           {/* Demo flow strip */}
           <div className="grid gap-3 sm:grid-cols-4">
             {[
-              { step: '1', label: 'Admin whitelists investor wallet', action: 'SET — KYC approval on-chain', color: 'amber' },
-              { step: '2', label: 'Admin mints tokens to investor', action: 'SET — issues fund units', color: 'amber' },
-              { step: '3', label: 'Anyone reads KYC status or balance', action: 'GET — reads from chain', color: 'blue' },
-              { step: '4', label: 'Admin burns or clawbacks tokens', action: 'SET — regulatory control', color: 'amber' },
-            ].map(({ step, label, action, color }) => (
-              <div key={step} className={`rounded-2xl border border-slate-800 bg-slate-950/60 p-4`}>
-                <p className={`text-xs font-bold uppercase tracking-widest text-${color}-400`}>Step {step}</p>
+              { step: '1', label: 'Admin whitelists investor wallet', action: 'SET — KYC approval on-chain', blue: false },
+              { step: '2', label: 'Anyone verifies KYC status on-chain', action: 'GET — reads from chain', blue: true },
+              { step: '3', label: 'Admin mints tokens to investor', action: 'SET — issues fund units', blue: false },
+              { step: '4', label: 'Admin burns or clawbacks tokens', action: 'SET — regulatory control', blue: false },
+            ].map(({ step, label, action, blue }) => (
+              <div key={step} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                <p className={`text-xs font-bold uppercase tracking-widest ${blue ? 'text-blue-400' : 'text-amber-400'}`}>Step {step}</p>
                 <p className="mt-1 text-sm font-medium text-white">{label}</p>
-                <p className={`mt-1 text-xs text-${color}-400/70`}>{action}</p>
+                <p className={`mt-1 text-xs ${blue ? 'text-blue-400/70' : 'text-amber-400/70'}`}>{action}</p>
               </div>
             ))}
           </div>
@@ -712,9 +712,9 @@ export default function Home() {
 
               {connected && (
                 <div className="mt-5 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
-                  <p className="text-xs font-semibold text-amber-400 uppercase tracking-widest">Demo tip — Step 1</p>
+                  <p className="text-xs font-semibold text-amber-400 uppercase tracking-widest">Demo tip — Steps 1 → 2 → 3</p>
                   <p className="mt-1 text-sm text-slate-300">
-                    Whitelist the investor wallet first — tokens can only be minted to KYC-approved wallets.
+                    Whitelist the investor wallet first, verify KYC status, then mint tokens.
                   </p>
                   <button
                     onClick={() => setWhitelistTarget(walletAddress)}
