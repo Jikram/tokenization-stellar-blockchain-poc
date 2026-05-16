@@ -103,15 +103,24 @@ stellar contract invoke \
   --asset_name "$ASSET_NAME"
 echo "        ✓ Contract initialized"
 
+# Step 5 — regenerate contract-interface.json
+echo ""
+echo "[ 5/6 ] Regenerating contract-interface.json..."
+cd "$ROOT"
+stellar contract info interface \
+  --wasm "$WASM_PATH" \
+  --output json-formatted 2>/dev/null > "$ROOT/contract-interface.json"
+echo "        ✓ contract-interface.json updated"
+
 echo ""
 echo "========================================"
 echo " Contract deployed and initialized!"
 echo " Contract ID: $CONTRACT_ID"
 echo "========================================"
 
-# Step 5 — Vercel
+# Step 6 — Vercel
 echo ""
-echo "[ 5/5 ] Updating Vercel..."
+echo "[ 6/6 ] Updating Vercel..."
 cd "$ROOT/frontend"
 npx vercel env rm NEXT_PUBLIC_CONTRACT_ID production --yes
 echo "$CONTRACT_ID" | npx vercel env add NEXT_PUBLIC_CONTRACT_ID production

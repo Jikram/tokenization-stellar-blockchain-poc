@@ -159,6 +159,59 @@ function AssetMetadataCard({ meta, circulatingSupply }: { meta: any; circulating
   );
 }
 
+function EventDetail({ topic, value }: { topic: string; value: string }) {
+  try {
+    const d = JSON.parse(value);
+    if (typeof d !== 'object' || d === null) return <p className="mt-1 text-sm text-slate-300 truncate">{formatEventValue(value)}</p>;
+    const nav = (p: any) => `$${(Number(p) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+    const ts = (t: any) => new Date(Number(t) * 1000).toLocaleString();
+    const addr = (a: any) => shortenAddress(String(a));
+    if (topic === 'approved') return (
+      <div className="mt-2 space-y-1">
+        <Row label="Investor" value={addr(d.user)} mono />
+        <Row label="Status" value="✓ Approved" highlight="green" />
+        <Row label="By Admin" value={addr(d.admin)} mono />
+        <Row label="Time" value={ts(d.timestamp)} />
+      </div>
+    );
+    if (topic === 'minted') return (
+      <div className="mt-2 space-y-1">
+        <Row label="Investor" value={addr(d.user)} mono />
+        <Row label="Amount" value={`+${Number(d.amount).toLocaleString()} units`} highlight="green" />
+        <Row label="New Balance" value={`${Number(d.new_balance).toLocaleString()} units`} />
+        <Row label="Circulating" value={`${Number(d.circulating_supply).toLocaleString()} units`} />
+        <Row label="NAV" value={nav(d.nav_price)} />
+        <Row label="Time" value={ts(d.timestamp)} />
+      </div>
+    );
+    if (topic === 'burned') return (
+      <div className="mt-2 space-y-1">
+        <Row label="Investor" value={addr(d.user)} mono />
+        <Row label="Amount" value={`-${Number(d.amount).toLocaleString()} units`} highlight="red" />
+        <Row label="New Balance" value={`${Number(d.new_balance).toLocaleString()} units`} />
+        <Row label="Circulating" value={`${Number(d.circulating_supply).toLocaleString()} units`} />
+        <Row label="NAV" value={nav(d.nav_price)} />
+        <Row label="Time" value={ts(d.timestamp)} />
+      </div>
+    );
+    if (topic === 'clawback') return (
+      <div className="mt-2 space-y-1">
+        <Row label="Investor" value={addr(d.user)} mono />
+        <Row label="Amount" value={`-${Number(d.amount).toLocaleString()} units`} highlight="red" />
+        <Row label="Reason" value={String(d.reason)} />
+        <Row label="Severity" value={`${d.severity}/10`} />
+        <Row label="Case Ref" value={String(d.case_reference)} />
+        <Row label="New Balance" value={`${Number(d.new_balance).toLocaleString()} units`} />
+        <Row label="Circulating" value={`${Number(d.circulating_supply).toLocaleString()} units`} />
+        <Row label="Time" value={ts(d.timestamp)} />
+      </div>
+    );
+    return <p className="mt-1 text-sm text-slate-300 truncate">{formatEventValue(value)}</p>;
+  } catch {
+    return <p className="mt-1 text-sm text-slate-300 truncate">{formatEventValue(value)}</p>;
+  }
+}
+
 function Badge({ label, variant }: { label: string; variant: 'get' | 'set' | 'execute' }) {
   const styles = {
     get: 'bg-blue-500/15 text-blue-300 border border-blue-500/30',
@@ -177,6 +230,7 @@ export default function Home() {
   const [connected, setConnected] = useState(false);
   const [kycCheckTarget, setKycCheckTarget] = useState('');
   const [kycStatus, setKycStatus] = useState<string | null>(null);
+  const [kycCheckedAddress, setKycCheckedAddress] = useState('');
   const [whitelistTarget, setWhitelistTarget] = useState('');
   const [mintTarget, setMintTarget] = useState('');
   const [mintAmount, setMintAmount] = useState('');
@@ -232,8 +286,24 @@ export default function Home() {
     getCirculatingSupply().then(setCirculatingSupply).catch(() => {});
   };
 
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('poc_activity_log');
+      if (saved) setActivity(JSON.parse(saved));
+    } catch {}
+  }, []);
+
   const pushActivity = (entry: ActivityEntry) => {
-    setActivity((current) => [entry, ...current].slice(0, 8));
+    setActivity((current) => {
+      const updated = [entry, ...current].slice(0, 30);
+      try { localStorage.setItem('poc_activity_log', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+  };
+
+  const clearActivity = () => {
+    setActivity([]);
+    try { localStorage.removeItem('poc_activity_log'); } catch {}
   };
 
   const handleConnect = async () => {
@@ -264,6 +334,7 @@ export default function Home() {
       if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID not configured.');
       pushActivity({ timestamp: new Date().toISOString(), type: 'kyc_check', status: 'pending', message: `Reading KYC status for ${target.slice(0, 8)}...` });
       const isApproved = await checkApprovalStatus(target);
+      setKycCheckedAddress(target);
       setKycStatus(isApproved ? 'approved' : 'not_approved');
       pushActivity({ timestamp: new Date().toISOString(), type: 'kyc_check', status: 'success', message: `${target.slice(0, 8)}... is ${isApproved ? 'KYC approved ✓' : 'not KYC approved ✗'}` });
     } catch (error) {
@@ -282,26 +353,29 @@ export default function Home() {
       if (!walletAddress) throw new Error('Connect your wallet first.');
       if (!whitelistTarget.trim()) throw new Error('Enter an investor wallet address.');
       pushActivity({ timestamp: new Date().toISOString(), type: 'whitelist', status: 'pending', message: `Writing KYC approval for ${whitelistTarget.slice(0, 8)}...` });
-      const result = await approveUser(walletAddress, whitelistTarget.trim());
+      const result = await approveUser(walletAddress, whitelistTarget.trim()) as any;
       pushActivity({
         timestamp: new Date().toISOString(),
         type: 'whitelist',
         status: 'success',
         message: `Investor whitelisted on-chain: ${whitelistTarget.slice(0, 8)}...`,
-        txHash: result.result?.transactionHash,
+        txHash: result?.result?.transactionHash,
       });
       setWhitelistTarget('');
     } catch (error) {
       const raw = error instanceof Error ? error.message : '';
+      const isTimeout = raw.includes('Transaction submitted');
       const isNotAdmin =
         raw.includes('UnreachableCodeReached') ||
         raw.includes('WasmVm') ||
         raw.includes('approve_user') ||
         raw.includes('only admin');
-      const message = isNotAdmin
+      const message = isTimeout
+        ? raw
+        : isNotAdmin
         ? 'Only the admin wallet can whitelist investors. Switch to the admin wallet in Freighter.'
         : raw || 'Whitelist failed';
-      pushActivity({ timestamp: new Date().toISOString(), type: 'whitelist', status: 'error', message });
+      pushActivity({ timestamp: new Date().toISOString(), type: 'whitelist', status: isTimeout ? 'success' : 'error', message });
     } finally {
       setLoading(false);
     }
@@ -316,24 +390,27 @@ export default function Home() {
       if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID not configured.');
       if (!walletAddress) throw new Error('Connect your wallet first.');
       pushActivity({ timestamp: new Date().toISOString(), type: 'mint', status: 'pending', message: `Minting ${amount} tokens to ${target.slice(0, 8)}...` });
-      const result = await mintTokens(walletAddress, target, amount);
+      const result = await mintTokens(walletAddress, target, amount) as any;
       await refreshBalances();
       pushActivity({
         timestamp: new Date().toISOString(),
         type: 'mint',
         status: 'success',
         message: `Minted ${amount} tokens to ${target.slice(0, 8)}...`,
-        txHash: result.result?.transactionHash,
+        txHash: result?.result?.transactionHash,
       });
       setMintTarget('');
       setMintAmount('');
     } catch (error) {
       const raw = error instanceof Error ? error.message : '';
-      const message = raw.includes('not approved')
-        ? 'Investor must be KYC approved before minting tokens.'
-        : raw.includes('total supply') ? 'Mint exceeds total supply cap of 1,000,000 units.'
+      const isTimeout = raw.includes('Transaction submitted');
+      const isContractReject = raw.includes('UnreachableCodeReached') || raw.includes('WasmVm') || raw.includes('InvalidAction');
+      const message = isTimeout
+        ? raw
+        : isContractReject
+        ? 'Mint rejected — investor wallet is not KYC approved, or amount exceeds total supply cap.'
         : raw || 'Mint failed';
-      pushActivity({ timestamp: new Date().toISOString(), type: 'mint', status: 'error', message });
+      pushActivity({ timestamp: new Date().toISOString(), type: 'mint', status: isTimeout ? 'success' : 'error', message });
     } finally {
       setLoading(false);
     }
@@ -354,25 +431,25 @@ export default function Home() {
         if (!severity || severity < 1 || severity > 10) throw new Error('Severity must be 1–10.');
         if (!caseRef) throw new Error('Case reference number is required.');
         pushActivity({ timestamp: new Date().toISOString(), type: 'clawback', status: 'pending', message: `Clawback ${amount} tokens from ${target.slice(0, 8)}... (${clawbackReason})` });
-        const result = await clawbackTokens(walletAddress, target, amount, clawbackReason.trim(), severity, caseRef);
+        const result = await clawbackTokens(walletAddress, target, amount, clawbackReason.trim(), severity, caseRef) as any;
         await refreshBalances();
         pushActivity({
           timestamp: new Date().toISOString(),
           type: 'clawback',
           status: 'success',
           message: `Clawback complete — ${amount} tokens removed from ${target.slice(0, 8)}...`,
-          txHash: result.result?.transactionHash,
+          txHash: result?.result?.transactionHash,
         });
       } else {
         pushActivity({ timestamp: new Date().toISOString(), type: 'burn', status: 'pending', message: `Burning ${amount} tokens from ${target.slice(0, 8)}...` });
-        const result = await burnTokens(walletAddress, target, amount);
+        const result = await burnTokens(walletAddress, target, amount) as any;
         await refreshBalances();
         pushActivity({
           timestamp: new Date().toISOString(),
           type: 'burn',
           status: 'success',
           message: `Burned ${amount} tokens from ${target.slice(0, 8)}...`,
-          txHash: result.result?.transactionHash,
+          txHash: result?.result?.transactionHash,
         });
       }
       setBurnTarget('');
@@ -382,10 +459,14 @@ export default function Home() {
       setClawbackCaseRef('');
     } catch (error) {
       const raw = error instanceof Error ? error.message : '';
-      const message = raw.includes('more than current balance')
+      const isTimeout = raw.includes('Transaction submitted');
+      const isContractReject = raw.includes('UnreachableCodeReached') || raw.includes('WasmVm') || raw.includes('InvalidAction');
+      const message = isTimeout
+        ? raw
+        : isContractReject
         ? 'Cannot burn/clawback more than the investor currently holds.'
         : raw || 'Operation failed';
-      pushActivity({ timestamp: new Date().toISOString(), type: burnType, status: 'error', message });
+      pushActivity({ timestamp: new Date().toISOString(), type: burnType, status: isTimeout ? 'success' : 'error', message });
     } finally {
       setLoading(false);
     }
@@ -554,7 +635,7 @@ export default function Home() {
               <div className="mt-6 grid gap-3 sm:grid-cols-[1fr_auto]">
                 <input
                   value={kycCheckTarget}
-                  onChange={(e) => setKycCheckTarget(e.target.value)}
+                  onChange={(e) => { setKycCheckTarget(e.target.value); setKycStatus(null); }}
                   placeholder="Paste any Stellar wallet address…"
                   className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-blue-400 placeholder:text-slate-600"
                 />
@@ -573,16 +654,19 @@ export default function Home() {
               </p>
 
               {kycStatus && (
-                <div className={`mt-4 rounded-2xl p-4 flex items-center gap-3 ${
+                <div className={`mt-4 rounded-2xl p-4 flex items-start gap-3 ${
                   kycStatus === 'approved' ? 'bg-emerald-500/10 border border-emerald-500/30' :
                   kycStatus === 'not_approved' ? 'bg-red-500/10 border border-red-500/30' :
                   kycStatus === 'invalid' ? 'bg-amber-500/10 border border-amber-500/30' :
                   'bg-slate-800 border border-slate-700'
                 }`}>
-                  <span className="text-2xl">
+                  <span className="text-2xl mt-0.5">
                     {kycStatus === 'approved' ? '✓' : kycStatus === 'not_approved' ? '✗' : '!'}
                   </span>
-                  <div>
+                  <div className="flex-1">
+                    {kycCheckedAddress && (
+                      <p className="text-xs text-slate-500 font-mono mb-1 truncate">{kycCheckedAddress}</p>
+                    )}
                     <p className={`text-sm font-semibold ${
                       kycStatus === 'approved' ? 'text-emerald-300' :
                       kycStatus === 'not_approved' ? 'text-red-300' :
@@ -600,6 +684,14 @@ export default function Home() {
                         : 'Result returned by the Rust smart contract on Stellar Testnet'}
                     </p>
                   </div>
+                  <button
+                    onClick={() => { setKycStatus(null); setKycCheckedAddress(''); }}
+                    className="shrink-0 rounded-lg p-1 text-slate-500 hover:text-slate-300 transition hover:bg-slate-700"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  </button>
                 </div>
               )}
             </article>
@@ -822,9 +914,21 @@ export default function Home() {
 
             {/* Activity */}
             <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl">
-              <p className="text-xs uppercase tracking-widest text-cyan-400">Activity</p>
-              <h3 className="mt-2 text-xl font-semibold text-white">Transaction Log</h3>
-              <div className="mt-5 space-y-3">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs uppercase tracking-widest text-cyan-400">Activity</p>
+                  <h3 className="mt-2 text-xl font-semibold text-white">Transaction Log</h3>
+                </div>
+                {activity.length > 0 && (
+                  <button
+                    onClick={clearActivity}
+                    className="rounded-full border border-slate-700 px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:border-slate-500 transition"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <div className="mt-5 max-h-[420px] overflow-y-auto space-y-3 pr-1">
                 {activity.length === 0 ? (
                   <div className="rounded-2xl bg-slate-950/80 p-4 text-sm text-slate-500">
                     No activity yet. Connect Freighter and interact with the contract.
@@ -861,7 +965,7 @@ export default function Home() {
                   <h3 className="mt-2 text-xl font-semibold text-white">Contract Events</h3>
                   {fetchRange && (
                     <p className="mt-1 text-xs text-slate-500">
-                      Ledgers {fetchRange.start.toLocaleString()} → {fetchRange.end.toLocaleString()} · ~{Math.round((fetchRange.end - fetchRange.start) * 5 / 3600)}h lookback
+                      Ledgers {fetchRange.start.toLocaleString()} → {fetchRange.end.toLocaleString()} · ~{Math.round((fetchRange.end - fetchRange.start) * 5 / 3600)}h lookback · max 20 events
                     </p>
                   )}
                 </div>
@@ -905,7 +1009,7 @@ export default function Home() {
                           ? <InitEventContent value={event.value} />
                           : topicKey === 'init'
                           ? (() => { try { const p = JSON.parse(event.value); const name = Array.isArray(p) ? p[1] : p?.asset_name; const led = Array.isArray(p) ? p[2] : p?.ledger; return <p className="mt-1 text-sm text-slate-300 truncate">{name ? `${name} · Ledger ${led}` : '—'}</p>; } catch { return <p className="mt-1 text-sm text-slate-300">—</p>; } })()
-                          : <p className="mt-1 text-sm text-slate-300 truncate">{formatEventValue(event.value)}</p>
+                          : <EventDetail topic={topicKey} value={event.value} />
                         }
                         <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
                           <span>Ledger {event.ledger}</span>
