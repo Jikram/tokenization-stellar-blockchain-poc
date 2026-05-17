@@ -80,7 +80,7 @@ function InitEventContent({ value }: { value: string }) {
           <Row label="Tags" value={Array.isArray(meta.tags) ? meta.tags.join(' · ') : '—'} />
           <Row label="Doc Hash" value={String(meta.document_hash ?? '—')} mono truncate />
           <Row label="Location" value={meta.geo ? `${meta.geo.region}, ${meta.geo.country}` : '—'} />
-          <Row label="Issued At" value={meta.issued_at ? new Date(Number(meta.issued_at) * 1000).toUTCString() : '—'} />
+          <Row label="Issued At" value={meta.issued_at ? new Date(Number(meta.issued_at) * 1000).toLocaleString() : '—'} />
           {meta.properties && Object.entries(meta.properties).map(([k, v]) => (
             <Row key={k} label={k.replace(/_/g, ' ')} value={String(v)} indent />
           ))}
@@ -150,7 +150,7 @@ function AssetMetadataCard({ meta, circulatingSupply }: { meta: any; circulating
         <Row label="Tags" value={Array.isArray(meta.tags) ? meta.tags.join(' · ') : '—'} />
         <Row label="Doc Hash" value={formatBytes(meta.document_hash)} mono truncate />
         <Row label="Location" value={meta.geo ? `${meta.geo.region}, ${meta.geo.country}` : '—'} />
-        <Row label="Issued At" value={meta.issued_at ? new Date(Number(meta.issued_at) * 1000).toUTCString() : '—'} />
+        <Row label="Issued At" value={meta.issued_at ? new Date(Number(meta.issued_at) * 1000).toLocaleString() : '—'} />
         {properties.map(([k, v]) => (
           <Row key={k} label={k.replace(/_/g, ' ')} value={v} indent />
         ))}
@@ -243,7 +243,7 @@ export default function Home() {
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [contractEvents, setContractEvents] = useState<ContractEvent[]>([]);
   const [adminAddress, setAdminAddress] = useState<string>('');
-  const [fetchRange, setFetchRange] = useState<{ start: number; end: number } | null>(null);
+  const [fetchRange, setFetchRange] = useState<{ start: number; end: number; source: 'stellar-expert' | 'rpc' } | null>(null);
   const [loading, setLoading] = useState(false);
   const [hasFreighter, setHasFreighter] = useState(false);
   const [userBalance, setUserBalance] = useState<number | null>(null);
@@ -476,9 +476,9 @@ export default function Home() {
     setLoading(true);
     try {
       pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'pending', message: 'Fetching on-chain events...' });
-      const { events, startLedger, endLedger } = await fetchContractEvents(20);
+      const { events, startLedger, endLedger, source } = await fetchContractEvents(50);
       setContractEvents(events);
-      setFetchRange({ start: startLedger, end: endLedger });
+      setFetchRange({ start: startLedger, end: endLedger, source });
       const initEvent = events.find((e) => e.topic[0] === 'init');
       if (initEvent) {
         try {
@@ -489,7 +489,8 @@ export default function Home() {
           setAdminAddress(initEvent.value);
         }
       }
-      pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'success', message: `Loaded ${events.length} contract events` });
+      const sourceLabel = source === 'stellar-expert' ? 'Stellar Expert (full history)' : 'Soroban RPC (~24h)';
+      pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'success', message: `Loaded ${events.length} events via ${sourceLabel}` });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fetch events';
       pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'error', message });
@@ -965,7 +966,10 @@ export default function Home() {
                   <h3 className="mt-2 text-xl font-semibold text-white">Contract Events</h3>
                   {fetchRange && (
                     <p className="mt-1 text-xs text-slate-500">
-                      Ledgers {fetchRange.start.toLocaleString()} → {fetchRange.end.toLocaleString()} · ~{Math.round((fetchRange.end - fetchRange.start) * 5 / 3600)}h lookback · max 20 events
+                      {fetchRange.source === 'stellar-expert'
+                        ? <>Full history · <span className="text-cyan-500">Stellar Expert</span></>
+                        : <>Ledgers {fetchRange.start.toLocaleString()} → {fetchRange.end.toLocaleString()} · ~{Math.round((fetchRange.end - fetchRange.start) * 5 / 3600)}h · <span className="text-amber-500">Soroban RPC fallback</span></>
+                      }
                     </p>
                   )}
                 </div>

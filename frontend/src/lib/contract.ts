@@ -1,4 +1,4 @@
-import { contract, Networks, rpc, scValToNative } from '@stellar/stellar-sdk';
+import { contract, Networks, rpc, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { signWithFreighter } from './freighter';
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org';
@@ -137,45 +137,109 @@ export async function getCirculatingSupply(): Promise<number> {
   return Number(sim.result ?? 0);
 }
 
-export async function fetchContractEvents(limit: number = 20): Promise<{ events: any[]; startLedger: number; endLedger: number }> {
-  if (!CONTRACT_ID) throw new Error('NEXT_PUBLIC_CONTRACT_ID is not configured.');
+function xdrBodyToReadable(bodyXdr: string): string {
+  try {
+    const scVal = xdr.ScVal.fromXDR(bodyXdr, 'base64');
+    const native = scValToNative(scVal);
+    if (typeof native === 'object' && native !== null) {
+      return JSON.stringify(native, (_, v) => {
+        if (typeof v === 'bigint') return v.toString();
+        if (v instanceof Uint8Array)
+          return Array.from(v).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+        if (v && typeof v === 'object' && v.type === 'Buffer' && Array.isArray(v.data))
+          return (v.data as number[]).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+        return v;
+      });
+    }
+    return String(native);
+  } catch {
+    return bodyXdr;
+  }
+}
+
+function scValToReadable(val: any): string {
+  try {
+    const native = scValToNative(val);
+    if (typeof native === 'object' && native !== null) {
+      return JSON.stringify(native, (_, v) => {
+        if (typeof v === 'bigint') return v.toString();
+        if (v instanceof Uint8Array)
+          return Array.from(v).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+        if (v && typeof v === 'object' && v.type === 'Buffer' && Array.isArray(v.data))
+          return (v.data as number[]).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+        return v;
+      });
+    }
+    return String(native);
+  } catch {
+    return val?.toString() ?? '';
+  }
+}
+
+async function fetchFromStellarExpert(limit: number): Promise<{ events: any[]; startLedger: number; endLedger: number; source: 'stellar-expert' | 'rpc' }> {
+  const url = `/api/contract-events?contractId=${CONTRACT_ID}&network=${NETWORK}&limit=${limit}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Stellar Expert API returned ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  const records: any[] = data._embedded?.records ?? [];
+  if (records.length === 0) throw new Error('No events returned from Stellar Expert');
+
+  const events = records.map((record: any) => ({
+    id: record.id,
+    type: 'contract',
+    ledger: Number(BigInt(record.id.split('-')[0]) / (2n ** 32n)),
+    contractId: record.contract,
+    topic: record.topics,
+    value: xdrBodyToReadable(record.bodyXdr),
+    inSuccessfulContractCall: true,
+  }));
+
+  events.reverse();
+  const ledgers = events.map((e) => e.ledger);
+  return { events, startLedger: Math.min(...ledgers), endLedger: Math.max(...ledgers), source: 'stellar-expert' };
+}
+
+async function fetchFromRPC(limit: number): Promise<{ events: any[]; startLedger: number; endLedger: number; source: 'stellar-expert' | 'rpc' }> {
   const server = new rpc.Server(RPC_URL);
   const latest = await server.getLatestLedger();
-  const startLedger = Math.max(1, latest.sequence - 10000);
-  const result = await server.getEvents({
-    startLedger,
-    filters: [{ type: 'contract', contractIds: [CONTRACT_ID] }],
-    limit,
-  });
-  const events = result.events.map((event) => {
-    const toReadable = (val: any): string => {
-      try {
-        const native = scValToNative(val);
-        if (typeof native === 'object' && native !== null) {
-          return JSON.stringify(native, (_, v) => {
-            if (typeof v === 'bigint') return v.toString();
-            if (v instanceof Uint8Array)
-              return Array.from(v).map((b: number) => b.toString(16).padStart(2, '0')).join('');
-            if (v && typeof v === 'object' && v.type === 'Buffer' && Array.isArray(v.data))
-              return (v.data as number[]).map((b: number) => b.toString(16).padStart(2, '0')).join('');
-            return v;
-          });
-        }
-        return String(native);
-      } catch {
-        return val?.toString() ?? '';
-      }
-    };
+  const wantedStart = Math.max(1, latest.sequence - 17280);
 
-    return {
-      id: event.id,
-      type: event.type,
-      ledger: event.ledger,
-      contractId: event.contractId,
-      topic: event.topic.map(toReadable),
-      value: toReadable(event.value),
-      inSuccessfulContractCall: event.inSuccessfulContractCall,
-    };
-  });
-  return { events, startLedger, endLedger: latest.sequence };
+  let result;
+  try {
+    result = await server.getEvents({
+      startLedger: wantedStart,
+      filters: [{ type: 'contract', contractIds: [CONTRACT_ID] }],
+      limit,
+    });
+  } catch (err: any) {
+    const match = String(err?.message ?? '').match(/oldest ledger[^\d]*(\d+)/i);
+    const oldest = match ? parseInt(match[1], 10) : Math.max(1, latest.sequence - 5000);
+    result = await server.getEvents({
+      startLedger: oldest,
+      filters: [{ type: 'contract', contractIds: [CONTRACT_ID] }],
+      limit,
+    });
+  }
+
+  const events = result.events.map((event) => ({
+    id: event.id,
+    type: event.type,
+    ledger: event.ledger,
+    contractId: event.contractId,
+    topic: event.topic.map(scValToReadable),
+    value: scValToReadable(event.value),
+    inSuccessfulContractCall: event.inSuccessfulContractCall,
+  }));
+
+  return { events, startLedger: wantedStart, endLedger: latest.sequence, source: 'rpc' };
+}
+
+export async function fetchContractEvents(limit: number = 50): Promise<{ events: any[]; startLedger: number; endLedger: number; source: 'stellar-expert' | 'rpc' }> {
+  if (!CONTRACT_ID) throw new Error('NEXT_PUBLIC_CONTRACT_ID is not configured.');
+  try {
+    return await fetchFromStellarExpert(limit);
+  } catch {
+    return await fetchFromRPC(limit);
+  }
 }
