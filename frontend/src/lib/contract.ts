@@ -5,12 +5,23 @@ const RPC_URL = process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || 'https://soroban-test
 const NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'testnet';
 const NETWORK_PASSPHRASE = NETWORK === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
 const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || '';
+const ORACLE_CONTRACT_ID = process.env.NEXT_PUBLIC_ORACLE_CONTRACT_ID || '';
 
 async function getClient() {
   if (!CONTRACT_ID) throw new Error('NEXT_PUBLIC_CONTRACT_ID is not configured.');
   return (await contract.Client.from({
     rpcUrl: RPC_URL,
     contractId: CONTRACT_ID,
+    networkPassphrase: NETWORK_PASSPHRASE,
+    signTransaction: freighterSigner,
+  })) as contract.Client & Record<string, any>;
+}
+
+async function getOracleClient() {
+  if (!ORACLE_CONTRACT_ID) throw new Error('NEXT_PUBLIC_ORACLE_CONTRACT_ID is not configured.');
+  return (await contract.Client.from({
+    rpcUrl: RPC_URL,
+    contractId: ORACLE_CONTRACT_ID,
     networkPassphrase: NETWORK_PASSPHRASE,
     signTransaction: freighterSigner,
   })) as contract.Client & Record<string, any>;
@@ -235,11 +246,66 @@ async function fetchFromRPC(limit: number): Promise<{ events: any[]; startLedger
   return { events, startLedger: wantedStart, endLedger: latest.sequence, source: 'rpc' };
 }
 
-export async function fetchContractEvents(limit: number = 50): Promise<{ events: any[]; startLedger: number; endLedger: number; source: 'stellar-expert' | 'rpc' }> {
+export async function fetchContractEvents(
+  limit: number = 50,
+  onRetry?: (attempt: number, source: string) => void
+): Promise<{ events: any[]; startLedger: number; endLedger: number; source: 'stellar-expert' | 'rpc' }> {
   if (!CONTRACT_ID) throw new Error('NEXT_PUBLIC_CONTRACT_ID is not configured.');
-  try {
-    return await fetchFromStellarExpert(limit);
-  } catch {
-    return await fetchFromRPC(limit);
+
+  const MAX_ATTEMPTS = 4;
+  const DELAY_MS = [800, 1500, 2500]; // backoff between retries
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      await new Promise(r => setTimeout(r, DELAY_MS[attempt - 1]));
+      onRetry?.(attempt, 'Stellar Expert');
+    }
+    try {
+      return await fetchFromStellarExpert(limit);
+    } catch {
+      // fall through to RPC on last attempt
+    }
   }
+
+  // All Stellar Expert attempts exhausted — try RPC once
+  return await fetchFromRPC(limit);
+}
+
+// NAV Oracle contract functions
+
+export async function getNavPrice(): Promise<number> {
+  const client = await getOracleClient();
+  const assembled = await client.get_price();
+  const sim = await assembled.simulate();
+  return Number(sim.result ?? 0);
+}
+
+export async function hasNavPrice(): Promise<boolean> {
+  if (!ORACLE_CONTRACT_ID) return true;
+  const client = await getOracleClient();
+  const assembled = await client.has_price();
+  const sim = await assembled.simulate();
+  return Boolean(sim.result);
+}
+
+export async function updateNavPrice(adminAddress: string, priceUsd: number) {
+  if (!adminAddress) throw new Error('Missing admin wallet address.');
+  const priceCents = Math.round(priceUsd * 100);
+  if (priceCents <= 0) throw new Error('Price must be positive.');
+  const client = await getOracleClient();
+  const assembled = await client.update_price(
+    { admin: adminAddress, price: BigInt(priceCents) },
+    { publicKey: adminAddress }
+  );
+  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 45_000);
+}
+
+export async function clearNavPrice(adminAddress: string) {
+  if (!adminAddress) throw new Error('Missing admin wallet address.');
+  const client = await getOracleClient();
+  const assembled = await client.clear_price(
+    { admin: adminAddress },
+    { publicKey: adminAddress }
+  );
+  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 45_000);
 }

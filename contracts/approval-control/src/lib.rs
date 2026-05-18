@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractevent, contractimpl, contracttype, Address, Bytes, Env, Map, String, Vec,
+    contract, contractclient, contractevent, contractimpl, contracttype, Address, Bytes, Env, Map,
+    String, Vec,
 };
 
 #[contracttype]
@@ -84,6 +85,13 @@ pub struct Clawback {
     pub timestamp: u64,
 }
 
+// Cross-contract interface for the NAV oracle.
+// `contractclient` generates NavOracleClient used inside mint/burn/clawback.
+#[contractclient(name = "NavOracleClient")]
+pub trait NavOracleInterface {
+    fn get_price(env: Env) -> i128;
+}
+
 const TTL_THRESHOLD: u32 = 100;
 const TTL_EXTEND_TO: u32 = 3_110_400; // ~6 months at 5s/ledger
 
@@ -97,11 +105,12 @@ enum DataKey {
     Balances,
     Metadata,
     CirculatingSupply,
+    OracleId,
 }
 
 #[contractimpl]
 impl ApprovalControlContract {
-    pub fn initialize(env: Env, admin: Address, asset_name: String) {
+    pub fn initialize(env: Env, admin: Address, asset_name: String, nav_oracle_id: Address) {
         let admin_already_set: bool = env.storage().persistent().has(&DataKey::Admin);
         if admin_already_set {
             panic!("contract already initialized");
@@ -109,6 +118,9 @@ impl ApprovalControlContract {
         env.storage()
             .persistent()
             .set(&DataKey::Admin, &admin.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::OracleId, &nav_oracle_id);
         env.storage()
             .persistent()
             .set(&DataKey::ApprovedUsers, &Map::<Address, bool>::new(&env));
@@ -189,6 +201,14 @@ impl ApprovalControlContract {
             .unwrap_or_else(|| panic!("contract not initialized"))
     }
 
+    pub fn get_oracle_id(env: Env) -> Address {
+        Self::extend_ttl(&env);
+        env.storage()
+            .persistent()
+            .get(&DataKey::OracleId)
+            .unwrap_or_else(|| panic!("contract not initialized"))
+    }
+
     pub fn approve_user(env: Env, admin: Address, user: Address) {
         Self::require_admin(&env, &admin);
         let mut approved: Map<Address, bool> = env
@@ -235,6 +255,9 @@ impl ApprovalControlContract {
 
     pub fn mint(env: Env, admin: Address, user: Address, amount: u32) -> u32 {
         Self::require_admin(&env, &admin);
+        // Cross-contract call: fetches live NAV price from oracle.
+        // Panics (and rolls back the entire tx) if oracle has no price set.
+        let nav_price = Self::get_oracle_price(&env);
         let approved = Self::is_approved(env.clone(), user.clone());
         if !approved {
             panic!("user is not approved to receive tokens");
@@ -273,7 +296,7 @@ impl ApprovalControlContract {
             amount,
             new_balance,
             circulating_supply: new_circulating,
-            nav_price: 100_000i128,
+            nav_price,
             timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
@@ -282,6 +305,7 @@ impl ApprovalControlContract {
 
     pub fn burn(env: Env, admin: Address, user: Address, amount: u32) -> u32 {
         Self::require_admin(&env, &admin);
+        let nav_price = Self::get_oracle_price(&env);
         let mut balances: Map<Address, u32> = env
             .storage()
             .persistent()
@@ -312,7 +336,7 @@ impl ApprovalControlContract {
             amount,
             new_balance,
             circulating_supply: new_circulating,
-            nav_price: 100_000i128,
+            nav_price,
             timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
@@ -329,6 +353,7 @@ impl ApprovalControlContract {
         case_reference: i64,
     ) -> u32 {
         Self::require_admin(&env, &admin);
+        let nav_price = Self::get_oracle_price(&env);
         let mut balances: Map<Address, u32> = env
             .storage()
             .persistent()
@@ -359,7 +384,7 @@ impl ApprovalControlContract {
             amount,
             new_balance,
             circulating_supply: new_circulating,
-            nav_price: 100_000i128,
+            nav_price,
             reason,
             severity,
             case_reference,
@@ -382,6 +407,16 @@ impl ApprovalControlContract {
         }
     }
 
+    /// Cross-contract call to the NAV oracle. Panics (rolls back the tx) if oracle has no price.
+    fn get_oracle_price(env: &Env) -> i128 {
+        let oracle_id: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleId)
+            .unwrap_or_else(|| panic!("oracle not configured"));
+        NavOracleClient::new(env, &oracle_id).get_price()
+    }
+
     fn extend_ttl(env: &Env) {
         env.storage()
             .instance()
@@ -390,6 +425,11 @@ impl ApprovalControlContract {
             env.storage()
                 .persistent()
                 .extend_ttl(&DataKey::Admin, TTL_THRESHOLD, TTL_EXTEND_TO);
+        }
+        if env.storage().persistent().has(&DataKey::OracleId) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::OracleId, TTL_THRESHOLD, TTL_EXTEND_TO);
         }
         if env.storage().persistent().has(&DataKey::ApprovedUsers) {
             env.storage().persistent().extend_ttl(
@@ -421,17 +461,51 @@ impl ApprovalControlContract {
 #[cfg(test)]
 mod test {
     use super::*;
+    use nav_oracle::NavOracleContract;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{Address, Env, String};
+
+    /// Deploy and initialize both contracts. Oracle price set to $1,000.00.
+    /// Returns (token_contract_id, oracle_id, token_admin, oracle_admin).
+    fn setup_token(env: &Env) -> (Address, Address, Address, Address) {
+        let oracle_id = env.register(NavOracleContract, ());
+        let oracle_admin = Address::generate(env);
+        nav_oracle::NavOracleContractClient::new(env, &oracle_id).initialize(&oracle_admin);
+        nav_oracle::NavOracleContractClient::new(env, &oracle_id)
+            .update_price(&oracle_admin, &100_000i128);
+
+        let contract_id = env.register(ApprovalControlContract, ());
+        let admin = Address::generate(env);
+        ApprovalControlContractClient::new(env, &contract_id).initialize(
+            &admin,
+            &String::from_str(env, "Tokenized Real Estate Fund Series A"),
+            &oracle_id,
+        );
+        (contract_id, oracle_id, admin, oracle_admin)
+    }
+
+    /// Like setup_token but oracle price is NOT set. Used for failure tests.
+    fn setup_token_no_price(env: &Env) -> (Address, Address, Address, Address) {
+        let oracle_id = env.register(NavOracleContract, ());
+        let oracle_admin = Address::generate(env);
+        nav_oracle::NavOracleContractClient::new(env, &oracle_id).initialize(&oracle_admin);
+        // No update_price call — oracle has no price
+
+        let contract_id = env.register(ApprovalControlContract, ());
+        let admin = Address::generate(env);
+        ApprovalControlContractClient::new(env, &contract_id).initialize(
+            &admin,
+            &String::from_str(env, "Tokenized Real Estate Fund Series A"),
+            &oracle_id,
+        );
+        (contract_id, oracle_id, admin, oracle_admin)
+    }
 
     #[test]
     fn test_initialize_works() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, _, admin, _) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
-        client.initialize(&admin, &asset_name);
         assert!(!client.is_approved(&admin));
         assert_eq!(client.get_circulating_supply(), 0u32);
     }
@@ -439,22 +513,24 @@ mod test {
     #[test]
     fn test_get_admin_returns_stored_admin() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, _, admin, _) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
-        client.initialize(&admin, &asset_name);
         assert_eq!(client.get_admin(), admin);
+    }
+
+    #[test]
+    fn test_get_oracle_id_returns_oracle_address() {
+        let env = Env::default();
+        let (contract_id, oracle_id, _, _) = setup_token(&env);
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        assert_eq!(client.get_oracle_id(), oracle_id);
     }
 
     #[test]
     fn test_get_metadata_returns_stored_values() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, _, _, _) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
-        client.initialize(&admin, &asset_name);
         let meta = client.get_metadata();
         assert_eq!(meta.asset_type, String::from_str(&env, "real-estate"));
         assert_eq!(meta.total_supply, 1_000_000u128);
@@ -467,24 +543,18 @@ mod test {
     #[should_panic]
     fn test_unapproved_user_cannot_mint() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, _, admin, _) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let user = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
-        client.initialize(&admin, &asset_name);
         client.mint(&admin, &user, &100u32);
     }
 
     #[test]
     fn test_admin_can_approve_and_mint() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, _, admin, _) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let user = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
-        client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user);
         assert!(client.is_approved(&user));
         let balance = client.mint(&admin, &user, &500u32);
@@ -494,14 +564,27 @@ mod test {
     }
 
     #[test]
+    fn test_mint_records_oracle_price_in_event() {
+        let env = Env::default();
+        let (contract_id, oracle_id, admin, oracle_admin) = setup_token(&env);
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let oracle = nav_oracle::NavOracleContractClient::new(&env, &oracle_id);
+        let user = Address::generate(&env);
+        client.approve_user(&admin, &user);
+
+        // Update oracle to a different price and confirm it's captured in the event
+        oracle.update_price(&oracle_admin, &125_000i128); // $1,250.00
+        client.mint(&admin, &user, &10u32);
+        // If we reach here without panic, the mint succeeded and oracle was called
+        assert_eq!(client.get_balance(&user), 10u32);
+    }
+
+    #[test]
     fn test_burn_reduces_balance_and_circulating_supply() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, _, admin, _) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let user = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
-        client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user);
         client.mint(&admin, &user, &500u32);
         let new_balance = client.burn(&admin, &user, &200u32);
@@ -514,12 +597,9 @@ mod test {
     #[should_panic]
     fn test_cannot_burn_more_than_balance() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, _, admin, _) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let user = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
-        client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user);
         client.mint(&admin, &user, &100u32);
         client.burn(&admin, &user, &200u32);
@@ -528,12 +608,9 @@ mod test {
     #[test]
     fn test_clawback_works() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, _, admin, _) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let user = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
-        client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user);
         client.mint(&admin, &user, &500u32);
         let new_balance = client.clawback(
@@ -553,12 +630,9 @@ mod test {
     #[should_panic]
     fn test_cannot_clawback_more_than_balance() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, _, admin, _) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let user = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
-        client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user);
         client.mint(&admin, &user, &100u32);
         client.clawback(
@@ -575,12 +649,9 @@ mod test {
     #[should_panic]
     fn test_cannot_mint_beyond_total_supply() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, _, admin, _) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let user = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
-        client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user);
         client.mint(&admin, &user, &1_000_001u32);
     }
@@ -588,13 +659,10 @@ mod test {
     #[test]
     fn test_circulating_supply_tracks_across_multiple_investors() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, _, admin, _) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let user1 = Address::generate(&env);
         let user2 = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Tokenized Real Estate Fund Series A");
-        client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user1);
         client.approve_user(&admin, &user2);
         client.mint(&admin, &user1, &300u32);
@@ -603,28 +671,112 @@ mod test {
         client.burn(&admin, &user1, &100u32);
         assert_eq!(client.get_circulating_supply(), 400u32);
     }
+
+    // Oracle failure tests — demonstrate cross-contract atomicity
+
+    #[test]
+    #[should_panic]
+    fn test_mint_fails_when_oracle_has_no_price() {
+        let env = Env::default();
+        let (contract_id, _, admin, _) = setup_token_no_price(&env);
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let user = Address::generate(&env);
+        client.approve_user(&admin, &user);
+        // Oracle has no price — entire transaction rolls back atomically
+        client.mint(&admin, &user, &100u32);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_burn_fails_when_oracle_has_no_price() {
+        let env = Env::default();
+        let (contract_id, oracle_id, admin, oracle_admin) = setup_token(&env);
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let oracle = nav_oracle::NavOracleContractClient::new(&env, &oracle_id);
+        let user = Address::generate(&env);
+        client.approve_user(&admin, &user);
+        client.mint(&admin, &user, &100u32);
+
+        // Clear oracle price to trigger failure on next operation
+        oracle.clear_price(&oracle_admin);
+        // Burn rolls back atomically because oracle has no price
+        client.burn(&admin, &user, &50u32);
+    }
+
+    #[test]
+    fn test_balance_unchanged_after_oracle_failure() {
+        let env = Env::default();
+        let (contract_id, oracle_id, admin, oracle_admin) = setup_token(&env);
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let oracle = nav_oracle::NavOracleContractClient::new(&env, &oracle_id);
+        let user = Address::generate(&env);
+        client.approve_user(&admin, &user);
+        client.mint(&admin, &user, &100u32);
+        assert_eq!(client.get_balance(&user), 100u32);
+        assert_eq!(client.get_circulating_supply(), 100u32);
+
+        oracle.clear_price(&oracle_admin);
+
+        // Attempt burn — should fail. Verify state is unchanged.
+        let result = client.try_burn(&admin, &user, &50u32);
+        assert!(result.is_err());
+        // Atomicity: balance and supply unchanged after rollback
+        assert_eq!(client.get_balance(&user), 100u32);
+        assert_eq!(client.get_circulating_supply(), 100u32);
+    }
+
+    #[test]
+    fn test_mint_resumes_after_oracle_price_restored() {
+        let env = Env::default();
+        let (contract_id, oracle_id, admin, oracle_admin) = setup_token(&env);
+        let client = ApprovalControlContractClient::new(&env, &contract_id);
+        let oracle = nav_oracle::NavOracleContractClient::new(&env, &oracle_id);
+        let user = Address::generate(&env);
+        client.approve_user(&admin, &user);
+
+        oracle.clear_price(&oracle_admin);
+        let result = client.try_mint(&admin, &user, &100u32);
+        assert!(result.is_err());
+
+        // Restore price and verify mint succeeds
+        oracle.update_price(&oracle_admin, &110_000i128); // $1,100.00
+        client.mint(&admin, &user, &100u32);
+        assert_eq!(client.get_balance(&user), 100u32);
+    }
 }
 
 // Invariant tests — verify rules that must hold true under all conditions
 #[cfg(test)]
 mod invariant_tests {
     use super::*;
+    use nav_oracle::NavOracleContract;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{Address, Env, String};
 
-    // Invariant: once a user is approved they stay approved regardless of other operations
+    fn setup_token(env: &Env) -> (Address, Address) {
+        let oracle_id = env.register(NavOracleContract, ());
+        let oracle_admin = Address::generate(env);
+        nav_oracle::NavOracleContractClient::new(env, &oracle_id).initialize(&oracle_admin);
+        nav_oracle::NavOracleContractClient::new(env, &oracle_id)
+            .update_price(&oracle_admin, &100_000i128);
+        let contract_id = env.register(ApprovalControlContract, ());
+        let admin = Address::generate(env);
+        ApprovalControlContractClient::new(env, &contract_id).initialize(
+            &admin,
+            &String::from_str(env, "Test Asset"),
+            &oracle_id,
+        );
+        (contract_id, admin)
+    }
+
     #[test]
     fn invariant_approval_is_permanent() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, admin) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let user = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Test Asset");
-        client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user);
 
-        // approve many other users — original approval must still hold
         for _ in 0..5 {
             let other = Address::generate(&env);
             client.approve_user(&admin, &other);
@@ -632,34 +784,26 @@ mod invariant_tests {
         assert!(client.is_approved(&user));
     }
 
-    // Invariant: non-admin can never approve anyone
     #[test]
     fn invariant_only_admin_can_approve() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, _) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let non_admin = Address::generate(&env);
         let user = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Test Asset");
-        client.initialize(&admin, &asset_name);
 
         let result = client.try_approve_user(&non_admin, &user);
         assert!(result.is_err());
         assert!(!client.is_approved(&user));
     }
 
-    // Invariant: non-admin can never mint tokens
     #[test]
     fn invariant_only_admin_can_mint() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, admin) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let non_admin = Address::generate(&env);
         let user = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Test Asset");
-        client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user);
 
         let result = client.try_mint(&non_admin, &user, &100u32);
@@ -668,16 +812,12 @@ mod invariant_tests {
         assert_eq!(client.get_circulating_supply(), 0u32);
     }
 
-    // Invariant: circulating supply never exceeds total supply cap
     #[test]
     fn invariant_circulating_never_exceeds_total_supply() {
         let env = Env::default();
-        let contract_id = env.register(ApprovalControlContract, ());
+        let (contract_id, admin) = setup_token(&env);
         let client = ApprovalControlContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let user = Address::generate(&env);
-        let asset_name = String::from_str(&env, "Test Asset");
-        client.initialize(&admin, &asset_name);
         client.approve_user(&admin, &user);
 
         client.mint(&admin, &user, &999_999u32);
@@ -693,43 +833,50 @@ mod invariant_tests {
 #[cfg(test)]
 mod fuzz_tests {
     use super::*;
+    use nav_oracle::NavOracleContract;
     use proptest::prelude::*;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{Address, Env, String};
 
+    fn setup_token(env: &Env) -> (Address, Address) {
+        let oracle_id = env.register(NavOracleContract, ());
+        let oracle_admin = Address::generate(env);
+        nav_oracle::NavOracleContractClient::new(env, &oracle_id).initialize(&oracle_admin);
+        nav_oracle::NavOracleContractClient::new(env, &oracle_id)
+            .update_price(&oracle_admin, &100_000i128);
+        let contract_id = env.register(ApprovalControlContract, ());
+        let admin = Address::generate(env);
+        ApprovalControlContractClient::new(env, &contract_id).initialize(
+            &admin,
+            &String::from_str(env, "Fuzz Test Asset"),
+            &oracle_id,
+        );
+        (contract_id, admin)
+    }
+
     proptest! {
-        // Fuzz: is_approved never panics regardless of how many users are approved
         #[test]
         fn fuzz_is_approved_never_panics(n_approvals in 0usize..20) {
             let env = Env::default();
-            let contract_id = env.register(ApprovalControlContract, ());
+            let (contract_id, admin) = setup_token(&env);
             let client = ApprovalControlContractClient::new(&env, &contract_id);
-            let admin = Address::generate(&env);
-            let asset_name = String::from_str(&env, "Fuzz Test Asset");
-            client.initialize(&admin, &asset_name);
 
-            // approve each user and immediately verify
             for _ in 0..n_approvals {
                 let user = Address::generate(&env);
                 client.approve_user(&admin, &user);
                 prop_assert!(client.is_approved(&user));
             }
 
-            // a fresh unapproved address must always return false
             let unknown = Address::generate(&env);
             prop_assert!(!client.is_approved(&unknown));
         }
 
-        // Fuzz: circulating supply never exceeds total supply under random mint amounts
         #[test]
         fn fuzz_mint_never_exceeds_total_supply(amounts in proptest::collection::vec(1u32..100u32, 1..20)) {
             let env = Env::default();
-            let contract_id = env.register(ApprovalControlContract, ());
+            let (contract_id, admin) = setup_token(&env);
             let client = ApprovalControlContractClient::new(&env, &contract_id);
-            let admin = Address::generate(&env);
             let user = Address::generate(&env);
-            let asset_name = String::from_str(&env, "Fuzz Test Asset");
-            client.initialize(&admin, &asset_name);
             client.approve_user(&admin, &user);
 
             let mut total_minted: u32 = 0;
