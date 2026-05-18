@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { checkApprovalStatus, approveUser, mintTokens, burnTokens, clawbackTokens, fetchContractEvents, getBalance, getMetadata, getAdmin, getCirculatingSupply } from '../lib/contract';
+import { checkApprovalStatus, approveUser, mintTokens, burnTokens, clawbackTokens, fetchContractEvents, getBalance, getMetadata, getAdmin, getCirculatingSupply, getNavPrice, hasNavPrice, updateNavPrice, clearNavPrice } from '../lib/contract';
 import { connectFreighter, getFreighterPublicKey, checkFreighterInstalled } from '../lib/freighter';
 import { StrKey } from '@stellar/stellar-sdk';
 
 const NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'testnet';
 const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || 'Not set';
+const ORACLE_CONTRACT_ID = process.env.NEXT_PUBLIC_ORACLE_CONTRACT_ID || '';
 
 type ActivityEntry = {
   timestamp: string;
@@ -249,6 +250,10 @@ export default function Home() {
   const [userBalance, setUserBalance] = useState<number | null>(null);
   const [assetMetadata, setAssetMetadata] = useState<any>(null);
   const [circulatingSupply, setCirculatingSupply] = useState<number | null>(null);
+  const [navPrice, setNavPrice] = useState<number | null>(null);
+  const [oraclePriceSet, setOraclePriceSet] = useState<boolean>(true);
+  const [navPriceInput, setNavPriceInput] = useState('');
+  const [oracleLoading, setOracleLoading] = useState(false);
 
   const isAdmin = connected && walletAddress && adminAddress && walletAddress === adminAddress;
 
@@ -279,6 +284,30 @@ export default function Home() {
     getMetadata().then(setAssetMetadata).catch(() => setAssetMetadata(null));
     getAdmin().then(setAdminAddress).catch(() => {});
     getCirculatingSupply().then(setCirculatingSupply).catch(() => setCirculatingSupply(null));
+  }, []);
+
+  const loadOraclePriceState = async () => {
+    if (!ORACLE_CONTRACT_ID) return;
+    setOracleLoading(true);
+    try {
+      const hasPriceResult = await hasNavPrice();
+      setOraclePriceSet(hasPriceResult);
+      if (hasPriceResult) {
+        const price = await getNavPrice();
+        setNavPrice(price);
+      } else {
+        setNavPrice(null);
+      }
+    } catch {
+      // oracle not yet deployed or network error — leave state unchanged
+    } finally {
+      setOracleLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadOraclePriceState();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const refreshBalances = async () => {
@@ -389,7 +418,10 @@ export default function Home() {
     try {
       if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID not configured.');
       if (!walletAddress) throw new Error('Connect your wallet first.');
-      pushActivity({ timestamp: new Date().toISOString(), type: 'mint', status: 'pending', message: `Minting ${amount} tokens to ${target.slice(0, 8)}...` });
+      if (ORACLE_CONTRACT_ID && !oraclePriceSet) {
+        throw new Error('NAV Oracle has no price set — update the oracle price in the oracle panel first.');
+      }
+      pushActivity({ timestamp: new Date().toISOString(), type: 'mint', status: 'pending', message: `Minting ${amount} tokens to ${target.slice(0, 8)}... (oracle price check: ${navPrice !== null ? '$' + (navPrice / 100).toFixed(2) : 'live'})` });
       const result = await mintTokens(walletAddress, target, amount) as any;
       await refreshBalances();
       pushActivity({
@@ -408,7 +440,7 @@ export default function Home() {
       const message = isTimeout
         ? raw
         : isContractReject
-        ? 'Mint rejected — investor wallet is not KYC approved, or amount exceeds total supply cap.'
+        ? 'Mint rejected — investor wallet is not KYC approved, amount exceeds supply cap, or NAV oracle has no price set.'
         : raw || 'Mint failed';
       pushActivity({ timestamp: new Date().toISOString(), type: 'mint', status: isTimeout ? 'success' : 'error', message });
     } finally {
@@ -472,11 +504,65 @@ export default function Home() {
     }
   };
 
+  const handleUpdateNavPrice = async () => {
+    const priceUsd = parseFloat(navPriceInput);
+    if (!priceUsd || priceUsd <= 0) return;
+    setLoading(true);
+    try {
+      if (!walletAddress) throw new Error('Connect your wallet first.');
+      pushActivity({ timestamp: new Date().toISOString(), type: 'oracle_update', status: 'pending', message: `Updating NAV price to $${priceUsd.toFixed(2)}...` });
+      const result = await updateNavPrice(walletAddress, priceUsd) as any;
+      await loadOraclePriceState();
+      pushActivity({
+        timestamp: new Date().toISOString(),
+        type: 'oracle_update',
+        status: 'success',
+        message: `NAV price updated to $${priceUsd.toFixed(2)} — cross-contract call succeeded`,
+        txHash: result?.result?.transactionHash,
+      });
+      setNavPriceInput('');
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : '';
+      const isTimeout = raw.includes('Transaction submitted');
+      pushActivity({ timestamp: new Date().toISOString(), type: 'oracle_update', status: isTimeout ? 'success' : 'error', message: isTimeout ? raw : raw || 'Oracle update failed' });
+      if (isTimeout) { await loadOraclePriceState(); setNavPriceInput(''); }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClearNavPrice = async () => {
+    setLoading(true);
+    try {
+      if (!walletAddress) throw new Error('Connect your wallet first.');
+      pushActivity({ timestamp: new Date().toISOString(), type: 'oracle_clear', status: 'pending', message: 'Clearing oracle NAV price...' });
+      const result = await clearNavPrice(walletAddress) as any;
+      setNavPrice(null);
+      setOraclePriceSet(false);
+      pushActivity({
+        timestamp: new Date().toISOString(),
+        type: 'oracle_clear',
+        status: 'success',
+        message: 'Oracle price cleared — mint/burn/clawback will now fail atomically',
+        txHash: result?.result?.transactionHash,
+      });
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : '';
+      const isTimeout = raw.includes('Transaction submitted');
+      pushActivity({ timestamp: new Date().toISOString(), type: 'oracle_clear', status: isTimeout ? 'success' : 'error', message: isTimeout ? raw : raw || 'Oracle clear failed' });
+      if (isTimeout) { await loadOraclePriceState(); }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleFetchEvents = async () => {
     setLoading(true);
     try {
       pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'pending', message: 'Fetching on-chain events...' });
-      const { events, startLedger, endLedger, source } = await fetchContractEvents(50);
+      const { events, startLedger, endLedger, source } = await fetchContractEvents(50, (attempt) => {
+        pushActivity({ timestamp: new Date().toISOString(), type: 'fetch_events', status: 'pending', message: `Stellar Expert retry ${attempt}/3...` });
+      });
       setContractEvents(events);
       setFetchRange({ start: startLedger, end: endLedger, source });
       const initEvent = events.find((e) => e.topic[0] === 'init');
@@ -608,10 +694,14 @@ export default function Home() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
               <p className="text-xs text-slate-400 uppercase tracking-widest">Your Holdings</p>
               <p className="mt-1 text-sm font-semibold text-white">
-                {userBalance === null ? (connected ? '...' : '—') : `$${(userBalance * 1000).toLocaleString()}.00`}
+                {userBalance === null
+                  ? (connected ? '...' : '—')
+                  : navPrice !== null
+                  ? `$${((userBalance * navPrice) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+                  : `$${(userBalance * 1000).toLocaleString()}.00`}
               </p>
               {userBalance !== null && userBalance > 0 && (
-                <p className="mt-0.5 text-xs text-slate-500">{userBalance} unit{userBalance !== 1 ? 's' : ''} × $1,000.00</p>
+                <p className="mt-0.5 text-xs text-slate-500">{userBalance} unit{userBalance !== 1 ? 's' : ''} × ${navPrice !== null ? (navPrice / 100).toFixed(2) : '1,000.00'}</p>
               )}
             </div>
           </div>
@@ -760,6 +850,12 @@ export default function Home() {
                   <p className="text-xs text-slate-500">Switch to the admin wallet in Freighter to mint tokens.</p>
                 </div>
               )}
+              {ORACLE_CONTRACT_ID && !oraclePriceSet && (
+                <div className="mt-4 rounded-2xl border border-red-500/30 bg-red-500/5 p-3">
+                  <p className="text-xs font-semibold text-red-400">Oracle Warning</p>
+                  <p className="mt-0.5 text-xs text-slate-400">NAV oracle has no price set. Mint will be rejected until the oracle price is updated in the oracle panel.</p>
+                </div>
+              )}
               <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
                 <input
                   value={mintTarget}
@@ -891,26 +987,89 @@ export default function Home() {
           {/* Right sidebar */}
           <aside className="min-w-0 space-y-6">
 
-            {/* Asset NAV Feed */}
+            {/* Oracle NAV Feed */}
             <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-xl">
-              <p className="text-xs uppercase tracking-widest text-cyan-400">Mock Oracle</p>
-              <h3 className="mt-2 text-xl font-semibold text-white">Asset NAV Feed</h3>
-              <p className="mt-1 text-sm text-slate-400">Tokenized Real Estate Fund · Series A</p>
-              <div className="mt-6 rounded-2xl bg-slate-950/80 p-6 text-center">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs uppercase tracking-widest text-purple-400">Live Oracle · Cross-Contract</p>
+                  <h3 className="mt-2 text-xl font-semibold text-white">Asset NAV Feed</h3>
+                  <p className="mt-1 text-sm text-slate-400">Tokenized Real Estate Fund · Series A</p>
+                </div>
+                <button
+                  onClick={loadOraclePriceState}
+                  disabled={oracleLoading || !ORACLE_CONTRACT_ID}
+                  className="shrink-0 rounded-full border border-slate-700 px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:border-slate-500 transition disabled:opacity-40"
+                >
+                  {oracleLoading ? '...' : 'Refresh'}
+                </button>
+              </div>
+
+              <div className="mt-4 rounded-2xl bg-slate-950/80 p-6 text-center">
                 <p className="text-xs uppercase tracking-widest text-slate-400">Net Asset Value / Unit</p>
-                <p className="mt-3 text-5xl font-semibold text-white">$1,000.00</p>
-                <p className="mt-2 text-xs text-slate-500">Simulated price feed · Testnet only</p>
+                {!ORACLE_CONTRACT_ID ? (
+                  <>
+                    <p className="mt-3 text-5xl font-semibold text-white">$1,000.00</p>
+                    <p className="mt-2 text-xs text-slate-500">Oracle not deployed · deploy first</p>
+                  </>
+                ) : navPrice !== null ? (
+                  <>
+                    <p className="mt-3 text-5xl font-semibold text-white">
+                      ${(navPrice / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    </p>
+                    <p className="mt-2 text-xs text-emerald-500">Live · fetched from NAV oracle contract</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="mt-3 text-3xl font-semibold text-red-400">No price set</p>
+                    <p className="mt-2 text-xs text-red-500">Oracle has no price — mint/burn/clawback will fail</p>
+                  </>
+                )}
               </div>
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                <div className="rounded-2xl bg-slate-950/60 p-3 text-center">
-                  <p className="text-xs text-slate-400">Asset Type</p>
-                  <p className="mt-1 text-sm font-semibold text-white">Real Estate</p>
+
+              {ORACLE_CONTRACT_ID && (
+                <p className="mt-2 text-xs text-slate-600 font-mono truncate">Oracle: {ORACLE_CONTRACT_ID}</p>
+              )}
+
+              {/* Admin oracle controls */}
+              {isAdmin && ORACLE_CONTRACT_ID && (
+                <div className="mt-4 space-y-3 rounded-2xl border border-purple-500/20 bg-purple-500/5 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-purple-400">Oracle Admin</p>
+                  <div className="flex gap-2">
+                    <input
+                      value={navPriceInput}
+                      onChange={(e) => setNavPriceInput(e.target.value)}
+                      placeholder="New price in $ (e.g. 1250.00)"
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      className="flex-1 rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-purple-400 placeholder:text-slate-600"
+                    />
+                    <button
+                      onClick={handleUpdateNavPrice}
+                      disabled={loading || !navPriceInput}
+                      className="rounded-2xl bg-purple-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Update
+                    </button>
+                  </div>
+                  <button
+                    onClick={handleClearNavPrice}
+                    disabled={loading}
+                    className="w-full rounded-2xl border border-red-500/30 px-4 py-2.5 text-sm font-semibold text-red-400 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Clear Price — Demo Oracle Failure
+                  </button>
+                  <p className="text-xs text-slate-500">
+                    Clearing the price causes mint/burn/clawback to revert atomically — the token contract calls this oracle mid-transaction, and if it panics, the entire tx rolls back.
+                  </p>
                 </div>
-                <div className="rounded-2xl bg-slate-950/60 p-3 text-center">
-                  <p className="text-xs text-slate-400">Access</p>
-                  <p className="mt-1 text-sm font-semibold text-white">KYC Gated</p>
+              )}
+
+              {!isAdmin && connected && ORACLE_CONTRACT_ID && (
+                <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-950/60 p-3">
+                  <p className="text-xs text-slate-500">Switch to the admin wallet to update the oracle price.</p>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Activity */}

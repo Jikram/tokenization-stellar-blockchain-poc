@@ -509,6 +509,11 @@
           "doc": "",
           "name": "asset_name",
           "type_": "string"
+        },
+        {
+          "doc": "",
+          "name": "nav_oracle_id",
+          "type_": "address"
         }
       ],
       "outputs": []
@@ -576,6 +581,16 @@
             "name": "AssetMetadata"
           }
         }
+      ]
+    }
+  },
+  {
+    "function_v0": {
+      "doc": "",
+      "name": "get_oracle_id",
+      "inputs": [],
+      "outputs": [
+        "address"
       ]
     }
   },

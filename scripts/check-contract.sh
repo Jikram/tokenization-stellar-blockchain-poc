@@ -1,43 +1,49 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(dirname "$0")"/../contracts/approval-control
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
 
 echo "========================================"
-echo " Approval Control Contract — CI Checks"
+echo " Contract CI Checks (workspace)"
 echo "========================================"
 
-echo ""
-echo "[ 1/5 ] Formatting check (rustfmt)..."
-cargo fmt --check
-echo "       ✓ Formatting OK"
+for pkg in nav-oracle approval-control; do
+  echo ""
+  echo "--- $pkg ---"
+
+  echo ""
+  echo "[ fmt  ] Formatting check..."
+  cargo fmt --check -p "$pkg"
+  echo "         ✓ OK"
+
+  echo ""
+  echo "[ lint ] Clippy..."
+  cargo clippy -p "$pkg" -- -D warnings -A deprecated
+  echo "         ✓ OK"
+
+  echo ""
+  echo "[ test ] Unit tests..."
+  cargo test -p "$pkg"
+  echo "         ✓ OK"
+done
 
 echo ""
-echo "[ 2/5 ] Linting (clippy)..."
-cargo clippy -- -D warnings -A deprecated
-echo "       ✓ No lint warnings"
-
-echo ""
-echo "[ 3/5 ] Unit tests..."
-cargo test
-echo "       ✓ All tests passed"
-
-echo ""
-echo "[ 4/5 ] Security audit (cargo audit)..."
+echo "[ audit ] Security audit (workspace)..."
 if command -v cargo-audit >/dev/null 2>&1; then
-    cargo audit
-    echo "       ✓ No known vulnerabilities"
+  cargo audit
+  echo "          ✓ No known vulnerabilities"
 else
-    echo "       ⚠ cargo-audit not installed. Run: cargo install cargo-audit"
+  echo "          ⚠ cargo-audit not installed. Run: cargo install cargo-audit"
 fi
 
 echo ""
-echo "[ 5/5 ] Code coverage (cargo llvm-cov)..."
+echo "[ cov ] Code coverage (workspace)..."
 if command -v cargo-llvm-cov >/dev/null 2>&1; then
-    cargo llvm-cov --summary-only
-    echo "       ✓ Coverage report generated"
+  cargo llvm-cov --summary-only
+  echo "        ✓ Coverage report generated"
 else
-    echo "       ⚠ cargo-llvm-cov not installed. Run: cargo install cargo-llvm-cov"
+  echo "        ⚠ cargo-llvm-cov not installed. Run: cargo install cargo-llvm-cov"
 fi
 
 echo ""
