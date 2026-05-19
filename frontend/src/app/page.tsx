@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { checkApprovalStatus, approveUser, mintTokens, burnTokens, clawbackTokens, fetchContractEvents, getBalance, getMetadata, getAdmin, getCirculatingSupply, getNavPrice, hasNavPrice, updateNavPrice, clearNavPrice } from '../lib/contract';
-import { connectFreighter, getFreighterPublicKey, checkFreighterInstalled } from '../lib/freighter';
+import { checkApprovalStatus, approveUser, mintTokens, burnTokens, clawbackTokens, fetchContractEvents, getBalance, getMetadata, getAdmin, getCirculatingSupply, getNavPrice, hasNavPrice, updateNavPrice, clearNavPrice, setActiveSigner } from '../lib/contract';
+import { initKit, connectFreighterViaKit, tryReconnect, disconnectKit, getSavedWalletId, saveWalletId, onWalletSelected, signWithKit, walletLabel, FREIGHTER_ID, WALLET_CONNECT_ID } from '../lib/wallet';
+import { wcConnect, wcSign, wcReconnect, wcClear } from '../lib/walletconnect';
 import { StrKey } from '@stellar/stellar-sdk';
 
 const NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'testnet';
@@ -246,7 +247,11 @@ export default function Home() {
   const [adminAddress, setAdminAddress] = useState<string>('');
   const [fetchRange, setFetchRange] = useState<{ start: number; end: number; source: 'stellar-expert' | 'rpc' } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [hasFreighter, setHasFreighter] = useState(false);
+  const [signingInProgress, setSigningInProgress] = useState(false);
+  const [walletType, setWalletType] = useState<string | null>(null);
+  const [showWalletPicker, setShowWalletPicker] = useState(false);
+  const [wcQrUrl, setWcQrUrl] = useState<string | null>(null);
+  const [wcConnecting, setWcConnecting] = useState(false);
   const [userBalance, setUserBalance] = useState<number | null>(null);
   const [assetMetadata, setAssetMetadata] = useState<any>(null);
   const [circulatingSupply, setCirculatingSupply] = useState<number | null>(null);
@@ -258,21 +263,36 @@ export default function Home() {
   const isAdmin = connected && walletAddress && adminAddress && walletAddress === adminAddress;
 
   useEffect(() => {
-    const checkAndSetFreighter = async () => {
-      const detected = await checkFreighterInstalled();
-      setHasFreighter(detected);
-      if (detected) {
-        getFreighterPublicKey()
-          .then((publicKey) => {
-            setWalletAddress(publicKey);
-            setConnected(true);
-          })
-          .catch(() => setConnected(false));
-      }
-    };
-    checkAndSetFreighter();
-    const interval = setInterval(checkAndSetFreighter, 2000);
-    return () => clearInterval(interval);
+    if (typeof window === 'undefined') return;
+    initKit();
+
+    const unsubWalletSelected = onWalletSelected((id) => {
+      saveWalletId(id);
+    });
+
+    const savedId = getSavedWalletId();
+    if (savedId === WALLET_CONNECT_ID) {
+      wcReconnect().then((address) => {
+        if (address) {
+          setWalletAddress(address);
+          setConnected(true);
+          setWalletType(WALLET_CONNECT_ID);
+          setActiveSigner((xdr, opts) => wcSign(xdr, opts));
+        }
+      });
+    } else if (savedId) {
+      tryReconnect(savedId).then((address) => {
+        if (address) {
+          setWalletAddress(address);
+          setConnected(true);
+          setWalletType(savedId);
+          setActiveSigner((xdr, opts) => signWithKit(xdr, opts));
+        }
+      });
+    }
+
+    return () => { unsubWalletSelected(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -335,19 +355,63 @@ export default function Home() {
     try { localStorage.removeItem('poc_activity_log'); } catch {}
   };
 
-  const handleConnect = async () => {
+  const handleConnect = () => {
+    setShowWalletPicker(true);
+  };
+
+  const handleFreighterConnect = async () => {
     setLoading(true);
     try {
-      const publicKey = await connectFreighter();
-      setWalletAddress(publicKey);
+      const address = await connectFreighterViaKit();
+      saveWalletId(FREIGHTER_ID);
+      setActiveSigner((xdr, opts) => signWithKit(xdr, opts));
+      setWalletAddress(address);
       setConnected(true);
-      pushActivity({ timestamp: new Date().toISOString(), type: 'wallet_connect', status: 'success', message: `Wallet connected: ${publicKey.slice(0, 8)}...${publicKey.slice(-4)}` });
+      setWalletType(FREIGHTER_ID);
+      setShowWalletPicker(false);
+      pushActivity({ timestamp: new Date().toISOString(), type: 'wallet_connect', status: 'success', message: `Freighter connected: ${address.slice(0, 8)}...${address.slice(-4)}` });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to connect wallet';
+      const message = error instanceof Error ? error.message : 'Freighter connection failed';
       pushActivity({ timestamp: new Date().toISOString(), type: 'wallet_connect', status: 'error', message });
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleWCConnect = async () => {
+    setWcConnecting(true);
+    try {
+      const { uri, waitForApproval } = await wcConnect();
+      const QRCodeLib = (await import('qrcode')).default;
+      const qrUrl = await QRCodeLib.toDataURL(uri, { width: 260, margin: 2, color: { dark: '#000000', light: '#ffffff' } });
+      setWcQrUrl(qrUrl);
+      setWcConnecting(false);
+      const { address } = await waitForApproval();
+      saveWalletId(WALLET_CONNECT_ID);
+      setActiveSigner((xdr, opts) => wcSign(xdr, opts));
+      setWalletAddress(address);
+      setConnected(true);
+      setWalletType(WALLET_CONNECT_ID);
+      setShowWalletPicker(false);
+      setWcQrUrl(null);
+      pushActivity({ timestamp: new Date().toISOString(), type: 'wallet_connect', status: 'success', message: `WalletConnect connected: ${address.slice(0, 8)}...${address.slice(-4)}` });
+    } catch (error) {
+      setWcConnecting(false);
+      setWcQrUrl(null);
+      const message = error instanceof Error ? error.message : 'WalletConnect failed';
+      pushActivity({ timestamp: new Date().toISOString(), type: 'wallet_connect', status: 'error', message });
+    }
+  };
+
+  const handleDisconnect = async () => {
+    await disconnectKit();
+    wcClear();
+    setActiveSigner(null);
+    setWalletAddress('');
+    setConnected(false);
+    setWalletType(null);
+    setUserBalance(null);
+    pushActivity({ timestamp: new Date().toISOString(), type: 'wallet_disconnect', status: 'success', message: 'Wallet disconnected' });
   };
 
   const handleKycCheck = async () => {
@@ -377,6 +441,7 @@ export default function Home() {
 
   const handleWhitelistUser = async () => {
     setLoading(true);
+    setSigningInProgress(true);
     try {
       if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID not configured.');
       if (!walletAddress) throw new Error('Connect your wallet first.');
@@ -393,7 +458,7 @@ export default function Home() {
       setWhitelistTarget('');
     } catch (error) {
       const raw = error instanceof Error ? error.message : '';
-      const isTimeout = raw.includes('Transaction submitted');
+      const isTimeout = raw.includes('Timed out waiting');
       const isNotAdmin =
         raw.includes('UnreachableCodeReached') ||
         raw.includes('WasmVm') ||
@@ -402,11 +467,12 @@ export default function Home() {
       const message = isTimeout
         ? raw
         : isNotAdmin
-        ? 'Only the admin wallet can whitelist investors. Switch to the admin wallet in Freighter.'
+        ? 'Only the admin wallet can whitelist investors. Connect with the admin wallet to proceed.'
         : raw || 'Whitelist failed';
       pushActivity({ timestamp: new Date().toISOString(), type: 'whitelist', status: isTimeout ? 'success' : 'error', message });
     } finally {
       setLoading(false);
+      setSigningInProgress(false);
     }
   };
 
@@ -415,6 +481,7 @@ export default function Home() {
     const amount = parseInt(mintAmount, 10);
     if (!target || !amount || amount <= 0) return;
     setLoading(true);
+    setSigningInProgress(true);
     try {
       if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID not configured.');
       if (!walletAddress) throw new Error('Connect your wallet first.');
@@ -435,7 +502,7 @@ export default function Home() {
       setMintAmount('');
     } catch (error) {
       const raw = error instanceof Error ? error.message : '';
-      const isTimeout = raw.includes('Transaction submitted');
+      const isTimeout = raw.includes('Timed out waiting');
       const isContractReject = raw.includes('UnreachableCodeReached') || raw.includes('WasmVm') || raw.includes('InvalidAction');
       const message = isTimeout
         ? raw
@@ -445,6 +512,7 @@ export default function Home() {
       pushActivity({ timestamp: new Date().toISOString(), type: 'mint', status: isTimeout ? 'success' : 'error', message });
     } finally {
       setLoading(false);
+      setSigningInProgress(false);
     }
   };
 
@@ -453,6 +521,7 @@ export default function Home() {
     const amount = parseInt(burnAmount, 10);
     if (!target || !amount || amount <= 0) return;
     setLoading(true);
+    setSigningInProgress(true);
     try {
       if (!CONTRACT_ID || CONTRACT_ID === 'Not set') throw new Error('Contract ID not configured.');
       if (!walletAddress) throw new Error('Connect your wallet first.');
@@ -491,7 +560,7 @@ export default function Home() {
       setClawbackCaseRef('');
     } catch (error) {
       const raw = error instanceof Error ? error.message : '';
-      const isTimeout = raw.includes('Transaction submitted');
+      const isTimeout = raw.includes('Timed out waiting');
       const isContractReject = raw.includes('UnreachableCodeReached') || raw.includes('WasmVm') || raw.includes('InvalidAction');
       const message = isTimeout
         ? raw
@@ -501,6 +570,7 @@ export default function Home() {
       pushActivity({ timestamp: new Date().toISOString(), type: burnType, status: isTimeout ? 'success' : 'error', message });
     } finally {
       setLoading(false);
+      setSigningInProgress(false);
     }
   };
 
@@ -508,6 +578,7 @@ export default function Home() {
     const priceUsd = parseFloat(navPriceInput);
     if (!priceUsd || priceUsd <= 0) return;
     setLoading(true);
+    setSigningInProgress(true);
     try {
       if (!walletAddress) throw new Error('Connect your wallet first.');
       pushActivity({ timestamp: new Date().toISOString(), type: 'oracle_update', status: 'pending', message: `Updating NAV price to $${priceUsd.toFixed(2)}...` });
@@ -523,16 +594,18 @@ export default function Home() {
       setNavPriceInput('');
     } catch (error) {
       const raw = error instanceof Error ? error.message : '';
-      const isTimeout = raw.includes('Transaction submitted');
+      const isTimeout = raw.includes('Timed out waiting');
       pushActivity({ timestamp: new Date().toISOString(), type: 'oracle_update', status: isTimeout ? 'success' : 'error', message: isTimeout ? raw : raw || 'Oracle update failed' });
       if (isTimeout) { await loadOraclePriceState(); setNavPriceInput(''); }
     } finally {
       setLoading(false);
+      setSigningInProgress(false);
     }
   };
 
   const handleClearNavPrice = async () => {
     setLoading(true);
+    setSigningInProgress(true);
     try {
       if (!walletAddress) throw new Error('Connect your wallet first.');
       pushActivity({ timestamp: new Date().toISOString(), type: 'oracle_clear', status: 'pending', message: 'Clearing oracle NAV price...' });
@@ -548,11 +621,12 @@ export default function Home() {
       });
     } catch (error) {
       const raw = error instanceof Error ? error.message : '';
-      const isTimeout = raw.includes('Transaction submitted');
+      const isTimeout = raw.includes('Timed out waiting');
       pushActivity({ timestamp: new Date().toISOString(), type: 'oracle_clear', status: isTimeout ? 'success' : 'error', message: isTimeout ? raw : raw || 'Oracle clear failed' });
       if (isTimeout) { await loadOraclePriceState(); }
     } finally {
       setLoading(false);
+      setSigningInProgress(false);
     }
   };
 
@@ -587,6 +661,15 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
+      {/* WalletConnect signing reminder — shown while a transaction is waiting for mobile approval */}
+      {signingInProgress && walletType === WALLET_CONNECT_ID && (
+        <div className="fixed top-0 inset-x-0 z-40 flex items-center justify-center gap-3 bg-cyan-500/95 px-4 py-3 text-slate-950 shadow-lg">
+          <svg className="shrink-0 animate-spin" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+          </svg>
+          <span className="text-sm font-semibold">Open Lobstr on your phone and approve the transaction</span>
+        </div>
+      )}
       <div className="mx-auto max-w-7xl px-6 py-10">
 
         {/* Header */}
@@ -599,18 +682,35 @@ export default function Home() {
                 A regulated tokenized asset on Stellar Testnet. Investor wallets must be KYC-approved on-chain before receiving tokens — enforced by a Rust smart contract, not a database.
               </p>
             </div>
-            <div className="flex flex-col gap-3 sm:items-end">
-              <button
-                onClick={handleConnect}
-                disabled={loading || !hasFreighter}
-                className="inline-flex items-center justify-center rounded-full bg-cyan-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {connected ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : 'Connect Freighter'}
-              </button>
-              {!hasFreighter && (
-                <p className="text-xs text-amber-400">
-                  <a href="https://www.freighter.app/" target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-300">Install Freighter</a> to interact with the contract.
-                </p>
+            <div className="flex flex-col gap-2 sm:items-end">
+              {connected ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => navigator.clipboard.writeText(walletAddress)}
+                    title="Copy address"
+                    className="inline-flex items-center justify-center rounded-full bg-cyan-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
+                  >
+                    {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
+                  </button>
+                  <button
+                    onClick={handleDisconnect}
+                    title="Disconnect wallet"
+                    className="rounded-full border border-slate-700 px-3 py-2.5 text-xs text-slate-400 transition hover:border-slate-500 hover:text-slate-200"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleConnect}
+                  disabled={loading}
+                  className="inline-flex items-center justify-center rounded-full bg-cyan-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Connect Wallet
+                </button>
+              )}
+              {connected && walletType && (
+                <p className="text-xs text-slate-500">via {walletLabel(walletType)}</p>
               )}
             </div>
           </div>
@@ -832,7 +932,7 @@ export default function Home() {
                 </button>
               </div>
               <p className="mt-2 text-xs text-slate-500">
-                Requires admin wallet. Freighter will prompt you to sign the transaction.
+                Requires admin wallet. Your wallet will prompt you to sign the transaction.
               </p>
             </article>
 
@@ -847,7 +947,7 @@ export default function Home() {
               </p>
               {!isAdmin && connected && (
                 <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-950/60 p-3">
-                  <p className="text-xs text-slate-500">Switch to the admin wallet in Freighter to mint tokens.</p>
+                  <p className="text-xs text-slate-500">Connect with the admin wallet to mint tokens.</p>
                 </div>
               )}
               {ORACLE_CONTRACT_ID && !oraclePriceSet && (
@@ -902,7 +1002,7 @@ export default function Home() {
               </p>
               {!isAdmin && connected && (
                 <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-950/60 p-3">
-                  <p className="text-xs text-slate-500">Switch to the admin wallet in Freighter to burn or clawback tokens.</p>
+                  <p className="text-xs text-slate-500">Connect with the admin wallet to burn or clawback tokens.</p>
                 </div>
               )}
 
@@ -1111,7 +1211,7 @@ export default function Home() {
               <div className="mt-5 max-h-[420px] overflow-y-auto space-y-3 pr-1">
                 {activity.length === 0 ? (
                   <div className="rounded-2xl bg-slate-950/80 p-4 text-sm text-slate-500">
-                    No activity yet. Connect Freighter and interact with the contract.
+                    No activity yet. Connect a wallet and interact with the contract.
                   </div>
                 ) : (
                   activity.map((entry, index) => (
@@ -1209,6 +1309,64 @@ export default function Home() {
           </aside>
         </section>
       </div>
+
+      {/* Wallet Picker Modal */}
+      {showWalletPicker && !connected && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="relative w-full max-w-sm rounded-3xl border border-cyan-500/35 bg-slate-800 p-8 shadow-[0_0_0_1px_rgba(6,182,212,0.18),0_32px_64px_-12px_rgba(0,0,0,0.95)]">
+            <button
+              onClick={() => setShowWalletPicker(false)}
+              className="absolute right-4 top-4 rounded-full p-2 text-slate-400 transition hover:bg-slate-700 hover:text-white"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+
+            {!wcQrUrl ? (
+              <>
+                <h2 className="text-xl font-semibold text-white">Connect Wallet</h2>
+                <p className="mt-2 text-sm text-slate-400">Choose how to connect to Stellar Testnet.</p>
+                <div className="mt-6 space-y-3">
+                  <button
+                    onClick={handleFreighterConnect}
+                    disabled={loading || wcConnecting}
+                    className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-5 py-4 text-left transition hover:border-cyan-500/50 hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    <p className="text-sm font-semibold text-white">Freighter</p>
+                    <p className="mt-0.5 text-xs text-slate-400">Browser extension — Chrome / Firefox</p>
+                  </button>
+                  <button
+                    onClick={handleWCConnect}
+                    disabled={loading || wcConnecting}
+                    className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-5 py-4 text-left transition hover:border-cyan-500/50 hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    <p className="text-sm font-semibold text-white">
+                      {wcConnecting ? 'Generating QR...' : 'WalletConnect'}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-400">Scan with Lobstr, XBULL, or any WC wallet</p>
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 className="text-xl font-semibold text-white">Scan with Lobstr</h2>
+                <p className="mt-2 text-sm text-slate-400">Open Lobstr on your phone and scan this QR code to connect.</p>
+                <div className="mt-5 flex justify-center">
+                  <img src={wcQrUrl} alt="WalletConnect QR Code" className="rounded-2xl border border-slate-700" width={260} height={260} />
+                </div>
+                <p className="mt-4 text-center text-xs text-slate-500">Waiting for wallet approval…</p>
+                <button
+                  onClick={() => setWcQrUrl(null)}
+                  className="mt-4 w-full rounded-2xl border border-slate-700 px-4 py-2.5 text-sm text-slate-400 transition hover:border-slate-500 hover:text-slate-200"
+                >
+                  Back
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </main>
   );
 }

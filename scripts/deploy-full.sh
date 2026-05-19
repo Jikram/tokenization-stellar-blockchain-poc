@@ -27,6 +27,7 @@ ADMIN_ADDRESS="${ADMIN_ADDRESS:-GDGQDFBRJ4V2Q7L7DZBM62P7IDDTBVF7KE6B5BMDVTG2JHJG
 ASSET_NAME="${ASSET_NAME:-Tokenized Real Estate Fund Series A}"
 NAV_PRICE="${NAV_PRICE:-100000}"
 NETWORK="${STELLAR_NETWORK:-testnet}"
+WALLETCONNECT_PROJECT_ID="${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID:-}"
 SKIP_CHECKS=false
 SKIP_TESTS=false
 
@@ -171,12 +172,17 @@ npx vercel env rm NEXT_PUBLIC_CONTRACT_ID production --yes 2>/dev/null || true
 npx vercel env rm NEXT_PUBLIC_ORACLE_CONTRACT_ID production --yes 2>/dev/null || true
 echo "$CONTRACT_ID"       | npx vercel env add NEXT_PUBLIC_CONTRACT_ID production
 echo "$ORACLE_CONTRACT_ID" | npx vercel env add NEXT_PUBLIC_ORACLE_CONTRACT_ID production
+if [ -n "$WALLETCONNECT_PROJECT_ID" ]; then
+  npx vercel env rm NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID production --yes 2>/dev/null || true
+  echo "$WALLETCONNECT_PROJECT_ID" | npx vercel env add NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID production
+fi
 
 # Also update local .env.local
 cat > "$ROOT/frontend/.env.local" <<EOF
 NEXT_PUBLIC_CONTRACT_ID=$CONTRACT_ID
 NEXT_PUBLIC_ORACLE_CONTRACT_ID=$ORACLE_CONTRACT_ID
 NEXT_PUBLIC_STELLAR_NETWORK=$NETWORK
+NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=${WALLETCONNECT_PROJECT_ID}
 EOF
 echo "        ✓ .env.local updated"
 
