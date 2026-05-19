@@ -1027,7 +1027,27 @@ export default function Home() {
               </div>
 
               {ORACLE_CONTRACT_ID && (
-                <p className="mt-2 text-xs text-slate-600 font-mono truncate">Oracle: {ORACLE_CONTRACT_ID}</p>
+                <div className="mt-2">
+                  <p className="text-xs text-slate-600 font-mono truncate">Oracle: {ORACLE_CONTRACT_ID}</p>
+                  <div className="mt-1.5 flex items-center gap-3">
+                    <a
+                      href={`https://stellar.expert/explorer/testnet/contract/${ORACLE_CONTRACT_ID}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 transition"
+                    >
+                      Stellar Expert ↗
+                    </a>
+                    <a
+                      href={`https://lab.stellar.org/r/testnet/contract/${ORACLE_CONTRACT_ID}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 transition"
+                    >
+                      Stellar Lab ↗
+                    </a>
+                  </div>
+                </div>
               )}
 
               {/* Admin oracle controls */}
