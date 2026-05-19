@@ -143,14 +143,18 @@ stellar contract invoke \
   --nav_oracle_id "$ORACLE_CONTRACT_ID"
 echo "        ✓ Token contract initialized"
 
-# Step 7 — regenerate contract-interface.json
+# Step 7 — regenerate contract interface files
 echo ""
-echo "[ 7/8 ] Regenerating contract-interface.json..."
+echo "[ 7/8 ] Regenerating contract interface files..."
 cd "$ROOT"
 stellar contract info interface \
   --wasm "$TOKEN_WASM" \
-  --output json-formatted 2>/dev/null > "$ROOT/contract-interface.json"
-echo "        ✓ contract-interface.json updated"
+  --output json-formatted 2>/dev/null > "$ROOT/approval-control-interface.json"
+stellar contract info interface \
+  --wasm "$ORACLE_WASM" \
+  --output json-formatted 2>/dev/null > "$ROOT/nav-oracle-interface.json"
+echo "        ✓ approval-control-interface.json updated"
+echo "        ✓ nav-oracle-interface.json updated"
 
 echo ""
 echo "========================================"
