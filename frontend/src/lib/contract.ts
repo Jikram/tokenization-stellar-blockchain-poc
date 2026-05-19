@@ -30,21 +30,35 @@ async function getOracleClient() {
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   const timeout = new Promise<never>((_, reject) =>
     setTimeout(
-      () => reject(new Error('Transaction submitted — check Stellar Expert to confirm. The network may be slow.')),
+      () => reject(new Error('Timed out waiting for wallet approval or confirmation. If you approved in Lobstr, the transaction may still be in flight — wait 30 seconds and check KYC status or fetch events before retrying.')),
       ms
     )
   );
   return Promise.race([promise, timeout]);
 }
 
+let _activeSigner: ((xdr: string, opts: { networkPassphrase?: string; address?: string }) => Promise<{ signedTxXdr: string }>) | null = null;
+
+export function setActiveSigner(fn: typeof _activeSigner): void {
+  _activeSigner = fn;
+}
+
 async function freighterSigner(
   transactionXdr: string,
   opts: { networkPassphrase?: string; address?: string; submit?: boolean; submitUrl?: string } = {}
-) {
-  return await signWithFreighter(transactionXdr, {
+): Promise<{ signedTxXdr: string }> {
+  if (_activeSigner) {
+    return await _activeSigner(transactionXdr, {
+      networkPassphrase: opts.networkPassphrase || NETWORK_PASSPHRASE,
+      address: opts.address,
+    });
+  }
+  const result = await signWithFreighter(transactionXdr, {
     networkPassphrase: opts.networkPassphrase || NETWORK_PASSPHRASE,
     address: opts.address,
   } as any);
+  if (typeof result === 'string') return { signedTxXdr: result };
+  return result as { signedTxXdr: string };
 }
 
 export async function initializeContract(adminAddress: string, assetName: string) {
@@ -73,7 +87,7 @@ export async function approveUser(adminAddress: string, userAddress: string) {
     { admin: adminAddress, user: userAddress },
     { publicKey: adminAddress }
   );
-  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 45_000);
+  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 120_000);
 }
 
 export async function getBalance(userAddress: string): Promise<number> {
@@ -108,7 +122,7 @@ export async function mintTokens(adminAddress: string, userAddress: string, amou
     { admin: adminAddress, user: userAddress, amount },
     { publicKey: adminAddress }
   );
-  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 45_000);
+  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 120_000);
 }
 
 export async function burnTokens(adminAddress: string, userAddress: string, amount: number) {
@@ -119,7 +133,7 @@ export async function burnTokens(adminAddress: string, userAddress: string, amou
     { admin: adminAddress, user: userAddress, amount },
     { publicKey: adminAddress }
   );
-  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 45_000);
+  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 120_000);
 }
 
 export async function clawbackTokens(
@@ -137,7 +151,7 @@ export async function clawbackTokens(
     { admin: adminAddress, user: userAddress, amount, reason, severity, case_reference: caseReference },
     { publicKey: adminAddress }
   );
-  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 45_000);
+  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 120_000);
 }
 
 export async function getCirculatingSupply(): Promise<number> {
@@ -297,7 +311,7 @@ export async function updateNavPrice(adminAddress: string, priceUsd: number) {
     { admin: adminAddress, price: BigInt(priceCents) },
     { publicKey: adminAddress }
   );
-  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 45_000);
+  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 120_000);
 }
 
 export async function clearNavPrice(adminAddress: string) {
@@ -307,5 +321,5 @@ export async function clearNavPrice(adminAddress: string) {
     { admin: adminAddress },
     { publicKey: adminAddress }
   );
-  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 45_000);
+  return await withTimeout(assembled.signAndSend({ signTransaction: freighterSigner }), 120_000);
 }
