@@ -111,6 +111,7 @@ enum DataKey {
 
 #[contractimpl]
 impl ApprovalControlContract {
+    // comment 
     pub fn initialize(env: Env, admin: Address, asset_name: String, nav_oracle_id: Address) {
         let admin_already_set: bool = env.storage().persistent().has(&DataKey::Admin);
         if admin_already_set {
@@ -211,6 +212,7 @@ impl ApprovalControlContract {
     }
 
     pub fn approve_user(env: Env, admin: Address, user: Address) {
+        // comment
         Self::require_admin(&env, &admin);
         let mut approved: Map<Address, bool> = env
             .storage()
@@ -255,6 +257,7 @@ impl ApprovalControlContract {
     }
 
     pub fn mint(env: Env, admin: Address, user: Address, amount: u32) -> u32 {
+        //comment 2
         Self::require_admin(&env, &admin);
         // Cross-contract call: fetches live NAV price from oracle.
         // Panics (and rolls back the entire tx) if oracle has no price set.
