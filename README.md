@@ -1,6 +1,6 @@
 # stellar-tokenization-control-poc
 
-Public Stellar Soroban demo proof-of-concept showing tokenization-style approval controls with a Rust smart contract and a Next.js frontend.
+Public Stellar Soroban demo proof-of-concept showing tokenization-style approval controls with a Rust smart contract and a Next.js frontend. Test1
 
 ## Project structure
 
